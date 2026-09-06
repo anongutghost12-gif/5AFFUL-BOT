@@ -12,7 +12,7 @@ const settle = () => new Promise(resolve => setImmediate(resolve))
 function setup(t) {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'ghana-test-'))
   t.after(() => fs.rmSync(temp, { recursive: true, force: true }))
-  const registry = [], cache = new Map(), state = { downloads: [], fail: false, global: {} }
+  const registry = [], cache = new Map(), state = { downloads: [], fail: false, global: {}, intervals: [] }
   const env = { SUDO: '233240000001,233240000002',
     SAFFUL_CALLGUARD_FILE: path.join(temp, 'call.json'), SAFFUL_ANTIVIEWONCE_FILE: path.join(temp, 'avo.json') }
   const fakeProcess = { env, stderr: { write() {} }, stdout: { write() {} } }
@@ -25,6 +25,7 @@ function setup(t) {
     const mod = { exports: {} }, realRequire = createRequire(filename)
     const req = name => {
       if (name === 'module') return fakeModule
+      if (name === './safful-mobile-notifications') return () => {}
       if (name === '@whiskeysockets/baileys') return { ...baileys, downloadContentFromMessage: async (media, kind) => {
         state.downloads.push({media, kind})
         if (media.directPath === '/expired') throw Object.assign(new Error('expired'), { status: 410 })
@@ -38,7 +39,9 @@ function setup(t) {
     }
     vm.runInNewContext(fs.readFileSync(filename, 'utf8'), { require: req, module: mod, exports: mod.exports,
       __dirname: path.dirname(filename), __filename: filename, Buffer, structuredClone, process: fakeProcess,
-      global: state.global, console, setTimeout, clearTimeout }, { filename })
+      global: state.global, console, setTimeout, clearTimeout,
+      setInterval: fn => { state.intervals.push(fn); return { unref() {}, fn } },
+      clearInterval: timer => { if (timer) timer.cleared = true } }, { filename })
     cache.set(filename, mod.exports)
     return mod.exports
   }
@@ -75,12 +78,13 @@ test('VCF deduplicates mapped contacts, skips hidden numbers and escapes/folds U
   assert.ok(csv.startsWith('\uFEFF')); assert.ok(csv.includes("'=HYPERLINK")); assert.ok(csv.includes("'+233240000003"))
 })
 
-test('export sends only to requesting personal chat or first sudo; unauthorized export is denied', async t => {
+test('silent group export always delivers only to owner, including when invoked by a member', async t => {
   const h=setup(t), v=h.load('plugins/vcf.js'), s=h.socket(), replies=[]
   const m={chat:'team@g.us',sender:'900001@lid',key:{remoteJid:'team@g.us',participant:'900001@lid'},reply:async x=>replies.push(x)}
   await v.exportContacts(m,'',{Void:s}); assert.equal(s.sent[0][0],'233240000001@s.whatsapp.net'); assert.ok(s.sent[0][1].document)
   await v.exportContacts({...m,fromMe:true},'csv sudo',{Void:s}); assert.equal(s.sent[1][0],'233240000001@s.whatsapp.net'); assert.equal(s.sent[1][1].mimetype,'text/csv')
-  await v.exportContacts({...m,sender:'900004@lid',key:{remoteJid:'team@g.us',participant:'900004@lid'}},'',{Void:s}); assert.equal(s.sent.length,2); assert.match(replies.at(-1),/only/)
+  await v.exportContacts({...m,sender:'900004@lid',key:{remoteJid:'team@g.us',participant:'900004@lid'}},'',{Void:s})
+  assert.equal(s.sent.length,3); assert.ok(s.sent.every(([jid])=>jid==='233240000001@s.whatsapp.net')); assert.equal(replies.length,0)
 })
 
 test('call guard handles callerPn, mapped LID, ringing and DND on fresh sockets without duplicates', async t => {
@@ -152,4 +156,15 @@ test('socket factory attaches on every reconnect and serializer recognizes sudo 
   assert.equal(owner.isCreator,true)
   const member=await serializer.smsg(second,{key:{remoteJid:'team@g.us',participant:'900003@lid'}})
   assert.equal(member.isCreator,false)
+})
+
+test('late payload replaces unavailable retry entry and survives a concurrent retry cycle', async t => {
+  const h=setup(t), avo=h.load('plugins/antiviewonce.js'), s=h.socket()
+  avo.saveSettings({global:true,contacts:[]}); avo.attach(s)
+  s.ws.emit('CB:message',{attrs:{id:'late',from:'900003@lid'},content:[{tag:'unavailable',attrs:{type:'view_once_unavailable_fanout'}}]}); await settle()
+  h.state.fail=true
+  s.ev.emit('messaging-history.set',{messages:[media('late')]}); await settle()
+  const key='900003@lid:late'; assert.ok(avo.retryQueue.get(key).raw.message)
+  h.state.fail=false; avo.runRetryCycle(); avo.runRetryCycle(); await settle()
+  assert.equal(s.sent.length,1); assert.equal(avo.stats.recovered,1); assert.equal(avo.retryQueue.size,0)
 })
