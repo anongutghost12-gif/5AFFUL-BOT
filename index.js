@@ -21,8 +21,8 @@ saffulCheckNodeVersion()
 
 // ── Uptime Guardian ──────────────────────────────────────────────────────
 // Override process.exit BEFORE any require() so all modules get it.
-// Suppress unrequested non-zero exits so transient WhatsApp failures recover
-// inside this process instead of making the panel reboot the whole app.
+// After first successful connection, suppresses exit(1) on reconnectable
+// disconnects (515/408) for 15 seconds while Baileys reconnects.
 // ──────────────────────────────────────────────────────────────────────────
 const __uptime = {
   active: false,
@@ -31,20 +31,16 @@ const __uptime = {
   origExit: process.exit.bind(process),
 }
 process.exit = function (code) {
-  if (code !== 0 && !global.__saffulAllowHardExit) {
-    // The legacy core calls exit(1) after certain successful connection events.
-    // Never replace an already-open socket, otherwise it creates a 440/515 loop.
-    if (global.__saffulConnectionState === 'open') {
-      return
-    }
-    process.stdout.write('[uptime] Suppressing process.exit(' + code + ') — connection supervisor will recover.\n')
-    try { global.__saffulRequestReconnect?.('core requested exit(' + code + ')') } catch {}
+  if (__uptime.active && __uptime.suppressUntil > Date.now() && code !== 0) {
+    process.stdout.write('[uptime] Suppressing process.exit(' + code + ') — reconnectable disconnect.\n')
     return
   }
   return __uptime.origExit(code)
 }
 global.__saffulUptimeSuppress = function (ms) {
   if (!__uptime.active) {
+    // Activation is silent — the guardian's value only shows when it acts
+    // (reconnectable disconnect suppressed, reconnect preserved).
     __uptime.active = true
   }
   __uptime.reconnectCount += 1
@@ -52,6 +48,7 @@ global.__saffulUptimeSuppress = function (ms) {
 }
 global.__saffulUptimeReconnected = function () {
   if (__uptime.reconnectCount > 0) {
+    process.stdout.write('[uptime] Reconnected after ' + __uptime.reconnectCount + ' suppressed disconnect(s) — uptime preserved\n')
     __uptime.reconnectCount = 0
   }
 }
@@ -84,16 +81,8 @@ require(__dirname + '/lib/safful-optional-sharp')
 require(__dirname + '/lib/brand-console')
 require(__dirname + '/lib/safful-history-mode')
 require(__dirname + '/lib/safful-responsive-qr').installResponsiveQrPage()
-const updateSession = require(__dirname + '/lib/safful-update-session')
-try {
-  const recovery = updateSession.restoreLatestIfNeeded()
-  if (recovery.restored) process.stdout.write('[session] Restored the latest protected update-session backup.\n')
-} catch (error) {
-  process.stdout.write(`[session] Update-session recovery failed: ${error?.message || error}\n`)
-}
 require(__dirname + '/lib/safful-rename-session')
 require(__dirname + '/lib/safful-fork-bypass')
-const sessionGuard = require(__dirname + '/lib/safful-session-guard')
 const { installOutgoingMessagePolicy, rebrandSocket } = require(__dirname + '/lib/safful-outgoing-message-policy')
 installOutgoingMessagePolicy()
 const preserveMobileNotifications = require(__dirname + '/lib/safful-mobile-notifications')
@@ -130,9 +119,8 @@ process.on('uncaughtException', (error) => {
   __saffulCrashCount += 1
   process.stdout.write(`[uptime] UNCAUGHT EXCEPTION (crash #${__saffulCrashCount}): ${error?.stack || error}\n`)
   if (__saffulCrashCount >= 5) {
-    process.stdout.write('[uptime] Repeated errors detected — keeping the process alive and recycling the WhatsApp connection.\n')
-    __saffulCrashCount = 0
-    try { global.__saffulRequestReconnect?.('repeated runtime errors') } catch {}
+    process.stdout.write('[uptime] Too many crashes in short window — exiting for PM2 backoff.\n')
+    process.exit(1)
   }
 })
 process.on('unhandledRejection', (reason) => {
@@ -144,17 +132,15 @@ const { installAuthRecovery, clearRecoveryState } = require(__dirname + '/lib/sa
 installAuthRecovery()
 
 const Config = require(__dirname + '/config')
-const { VERSION } = Config
 const attachProtection = require(__dirname + '/lib/safful-protection')
 attachProtection.installEarlyCaptureHook()
+require(__dirname + '/lib/safful-feature-hooks').install()
 process.stdout.write('[anti-delete] pre-core capture hook armed\n')
 const autoView = require(__dirname + '/plugins/statusauto.smd')
 const statusSave = require(__dirname + '/lib/safful-status-save')
 const attachRawDispatcher = require(__dirname + '/lib/safful-raw-dispatcher')
 
-// Keep this guard global so reconnecting/reloading a socket can never resend
-// the startup banner. A new Node process intentionally starts with a fresh guard.
-let connectedBannerSent = global.__saffulConnectedBannerSent === true
+let connectedBannerSent = false
 function connectedBannerText() {
   const handlers = Config.HANDLERS
   const prefa = !handlers || ['false', 'null', ' ', '', 'empty'].includes(String(handlers))
@@ -167,11 +153,7 @@ function connectedBannerText() {
   let database = 'JSON(no db)'
   if (/^mongodb/i.test(dbUrl)) database = 'MongoDB'
   else if (/^postgres/i.test(dbUrl)) database = 'PostgreSQL'
-  return [
-    '*🤖 SAFFUL-MD BOT CONNECTED*',
-    `🔧 *Prefix:* ${prefix || 'none'}  •  📦 *Plugins:* ${pluginCount}`,
-    `⚙️ *Mode:* ${mode}  •  🗄️ *Database:* ${database}`,
-  ].join('\n')
+  return ['Safful-Md Connected', '', `  Prefix  : [ ${prefix} ]`, `  Plugins : ${pluginCount}`, `  Mode    : ${mode}`, `  Database: ${database}`].join('\n')
 }
 
 function sudoRecipient() {
@@ -183,87 +165,46 @@ function sudoRecipient() {
 function notifyConnectedOnce(socket) {
   if (connectedBannerSent || !socket?.ev?.on || typeof socket?.sendMessage !== 'function') return
   const recipient = sudoRecipient()
+  // No sudo configured → nothing to send, stay silent (this is a config
+  // choice, not a runtime condition worth a console line).
   if (!recipient) return
-  let isConnectionOpen = false
-  let sendAttempts = 0
-  const maxAttempts = 30
+  // Only report delivery failure when we actually had a logged-in session
+  // and still could not deliver after all retries — transient per-attempt
+  // failures and the pre-login QR wait are silent.
+  let everLoggedIn = false
   const liveSocket = () => (global.__saffulLatestSocket && typeof global.__saffulLatestSocket?.sendMessage === 'function' ? global.__saffulLatestSocket : socket)
   const sendBanner = async () => {
     if (connectedBannerSent) return
-    if (!isConnectionOpen) return
     const current = liveSocket()
-    if (!current?.user?.id) return
-    sendAttempts += 1
+    if (!current?.user?.id) return false
+    everLoggedIn = true
     try {
       await current.sendMessage(recipient, { text: connectedBannerText() })
       connectedBannerSent = true
-      global.__saffulConnectedBannerSent = true
-    } catch {}
+      return true
+    } catch { return false }
   }
-  socket.ev.on('connection.update', ({ connection } = {}) => {
-    if (connection === 'open') {
-      isConnectionOpen = true
-      setTimeout(() => void sendBanner(), 3000)
-    } else {
-      isConnectionOpen = false
-    }
-  })
+  socket.ev.on('connection.update', ({ connection } = {}) => { if (connection === 'open') void sendBanner() })
+  let attempts = 0
   const retry = setInterval(() => {
-    if (connectedBannerSent || sendAttempts >= maxAttempts) { clearInterval(retry); return }
+    attempts += 1
+    if (connectedBannerSent || attempts > 15) {
+      clearInterval(retry)
+      if (!connectedBannerSent && everLoggedIn) {
+        process.stdout.write(`[connect-banner] could not deliver startup summary to ${recipient} after ${attempts} attempts — check owner number / chat privacy\n`)
+      }
+      return
+    }
     void sendBanner()
-  }, 5000)
+  }, 4000)
   retry.unref?.()
 }
 
 let bootPhase = 'auth-prep'
-let lastConnectionState = 'starting'
-let startInFlight = false
-let reconnectTimer = null
-let shutdownRequested = false
-let reconnectBlocked = false
-
-const DO_NOT_RECONNECT_CODES = new Set([401, 403, 411, 500])
-
-function disconnectCode(update = {}) {
-  const error = update?.lastDisconnect?.error
-  return Number(error?.output?.statusCode || error?.data?.statusCode || error?.statusCode || 0)
-}
-
-function scheduleReconnect(reason = 'connection closed', delay = 5000) {
-  if (shutdownRequested || reconnectBlocked || reconnectTimer) return
-  lastConnectionState = 'reconnecting'
-  global.__saffulConnectionState = 'reconnecting'
-  process.stdout.write(`[uptime] ${reason} — reconnecting in ${Math.ceil(delay / 1000)}s.\n`)
-  reconnectTimer = setTimeout(() => {
-    reconnectTimer = null
-    if (reconnectBlocked) return
-    if (startInFlight) return scheduleReconnect('startup still busy', 3000)
-    void start()
-  }, delay)
-}
-
-function cancelScheduledReconnect() {
-  if (!reconnectTimer) return
-  clearTimeout(reconnectTimer)
-  reconnectTimer = null
-  process.stdout.write('[uptime] Connection recovered — cancelled the fallback reconnect.\n')
-}
-
-global.__saffulRequestReconnect = (reason) => scheduleReconnect(reason, 1500)
-global.__saffulRecycleSocket = (reason) => {
-  if (shutdownRequested || reconnectBlocked) return
-  const socket = global.__saffulLatestSocket
-  try { socket?.end?.(new Error(reason)) } catch {}
-  scheduleReconnect(reason, 2000)
-}
-
 const start = async () => {
-  if (startInFlight || shutdownRequested) return
-  startInFlight = true
   let bot
+  let lastConnectionState = ''
   try {
-    // Restore session from PostgreSQL before auth prep
-    try { await sessionGuard.restoreSession() } catch {}
     await prepareAuthentication()
     if (global.__saffulAuthMethod === 'existing') clearRecoveryState()
     process.stdout.write(`[boot] auth method: ${global.__saffulAuthMethod || 'unknown'} (pairing number: ${global.__saffulPairingNumber || 'n/a'})\n`)
@@ -292,82 +233,55 @@ const start = async () => {
 
     bootPhase = 'core-load'
     process.stdout.write('[boot] loading core module…\n')
-    // Install temporary SPECTER banner catcher before smd.js loads
-    const __preSmdWrite = process.stdout.write.bind(process.stdout)
-    const __preSmdLog = console.log.bind(console)
-    const specterCatch = (text) => /SPECTER|MULTIDEVICE.*WHATSAPP.*USER.*BOT/i.test(text)
-    const blockCatch = (text) => /[╔╗╚╝║═]{4,}/.test(text)
-    process.stdout.write = function(chunk, ...rest) {
-      const t = typeof chunk === 'string' ? chunk : String(chunk)
-      if (specterCatch(t) || blockCatch(t)) return true
-      return __preSmdWrite(chunk, ...rest)
-    }
-    console.log = function(...args) {
-      const t = args.map(a => typeof a === 'string' ? a : String(a)).join(' ')
-      if (specterCatch(t) || blockCatch(t)) return
-      return __preSmdLog(...args)
-    }
     bot = require(__dirname + '/lib/smd')
-    // Restore proper brand interceptors
-    try {
-      const bc = require(__dirname + '/lib/brand-console')
-      if (process.__saffulStdoutInterceptor) process.stdout.write = process.__saffulStdoutInterceptor
-      if (process.__saffulStderrInterceptor) process.stderr.write = process.__saffulStderrInterceptor
-      if (process.__saffulConsoleLogInterceptor) console.log = process.__saffulConsoleLogInterceptor
-    } catch {}
-    // Load custom .js plugins explicitly
-    const _ep = ['hacking-tools','auto-moderation','privacy-commands','ig-download','sports-live','snap-download','pin-download','spotify-download','zzzz-safful-song','yt-download','antiviewonce']
-    for (const p of _ep) { try { require(__dirname + '/plugins/' + p) } catch (e) { process.stdout.write('[plugin] ' + p + ' err: ' + e.message + '\n') } }
-    // Print QR to console when smd.js generates it (raw write — bypasses log filter)
-    // Responsive: compact margin + auto-centering to the live terminal width
+    process.stdout.write('[boot] core loaded\n')
+
+    // ── QR watcher ────────────────────────────────────────────────────
+    // brand-console suppresses QR block output at the stdout level, and the
+    // core re-prints it through the styled console which panels mangle.
+    // Poll global.qr and re-print any NEW QR via the RAW stdout so it
+    // always lands visibly in the panel console, centered to the live
+    // terminal width (same design as the upstream repo's index.js).
     try {
       if (!global.__saffulQrWatcherInstalled) {
         global.__saffulQrWatcherInstalled = true
-        const qrcode = require('qrcode');
-        const rawOut = process.__saffulRawStdout || process.stdout.write.bind(process.stdout);
-        let _lastQr = '';
+        const qrcode = require('qrcode')
+        const rawOut = process.__saffulRawStdout || process.stdout.write.bind(process.stdout)
+        let _lastQr = ''
         const printQr = () => {
           if (!global.qr || global.qr === _lastQr) return
-          _lastQr = global.qr;
-          qrcode.toString(global.qr, {
-            type: 'terminal',
-            small: true,      // half-blocks → half the height, stays square
-            margin: 1,        // tight quiet zone → fits narrow screens
-          }, (err, str) => {
-            if (err || !str) return;
-            const cols = process.stdout.columns || 80;
-            const lines = str.split('\n');
-            // Measure VISIBLE width (strip ANSI escape codes) for correct centering
-            const visibleLen = (l) => l.replace(/\x1b\[[0-9;]*m/g, '').length;
-            const qrWidth = Math.max(...lines.map(visibleLen));
-            const pad = qrWidth < cols ? Math.floor((cols - qrWidth) / 2) : 0;
-            const centered = lines.map((l) => ' '.repeat(pad) + l).join('\n');
-            rawOut('\n  ── Scan this QR with WhatsApp ──\n\n' + centered + '\n');
-          });
-        };
-        setInterval(printQr, 2000).unref();
+          _lastQr = global.qr
+          qrcode.toString(global.qr, { type: 'terminal', small: true, margin: 1 }, (err, str) => {
+            if (err || !str) return
+            const lines = str.split('\n')
+            const visibleLen = (l) => l.replace(/\x1b\[[0-9;]*m/g, '').length
+            const qrWidth = Math.max(...lines.map(visibleLen))
+            // Pterodactyl runs the bot on a pipe (no TTY → columns is
+            // undefined). Centering to a guessed 80 pushed the QR past the
+            // visible width on smaller panels, where the console wrapped the
+            // rows and the QR came out distorted. When the real width is
+            // unknown, frame the QR at a compact 56 columns so it never
+            // wraps on narrow consoles; real terminals still center to their
+            // true width.
+            const hasRealWidth = process.stdout.columns && process.stdout.columns >= 60
+            const frame = hasRealWidth ? Math.min(process.stdout.columns, 120) : 56
+            const pad = qrWidth < frame ? Math.max(2, Math.floor((frame - qrWidth) / 2)) : 1
+            const centered = lines.map((l) => ' '.repeat(pad) + l).join('\n')
+            const port = global.port || process.env.PORT || ''
+            const urlHint = port
+              ? `\n  ── QR web page: http://<your-server-ip>:${port}/qr ──\n`
+              : '\n'
+            rawOut('\n  ── Scan this QR with WhatsApp ──\n\n' + centered + urlHint + '\n')
+          })
+        }
+        setInterval(printQr, 2000).unref()
       }
-    } catch (qrErr) { process.stdout.write('[boot] QR watcher failed: ' + qrErr.message + '\n') }
-    process.stdout.write('[boot] core loaded\n')
-    console.log(`Safful ${VERSION}`)
+    } catch (qrErr) { process.stdout.write('[boot] QR watcher failed: ' + (qrErr?.message || qrErr) + '\n') }
 
     bootPhase = 'session-init'
     process.stdout.write('[boot] initializing session…\n')
     await bot.init()
     process.stdout.write('[boot] session initialized\n')
-
-    // Re-run the readable command replacements after every legacy bundle has
-    // registered. This guarantees that the maintained handlers win over the
-    // older generated/obfuscated implementations.
-    for (const reliabilityPlugin of ['auto-moderation', 'safful-command-reliability', 'safful-group-reliability']) {
-      const pluginPath = require.resolve(__dirname + '/plugins/' + reliabilityPlugin)
-      delete require.cache[pluginPath]
-      require(pluginPath)
-    }
-    // Re-register after all legacy plugins so `.antiviewonce` is never
-    // shadowed by a late-loaded implementation.
-    require(__dirname + '/plugins/antiviewonce').installCommand()
-    const deduplication = require(__dirname + '/plugins/safful-command-reliability').deduplicateCommands()
 
     bootPhase = 'database-sync'
     process.stdout.write('[boot] syncing database…\n')
@@ -383,18 +297,13 @@ const start = async () => {
     } catch (probeError) { process.stdout.write(`[boot] WARNING: cannot reach web.whatsapp.com — ${probeError?.message || probeError}\n`) }
 
     const socket = await bot.connect()
-    sessionGuard.hookSocket(socket)
+    global.__saffulLatestSocket = socket
     process.stdout.write('[boot] socket created\n')
 
     const reportConnection = (update = {}) => {
       const state = String(update.connection || '')
-      if (state === 'open') {
-        reconnectBlocked = false
-        cancelScheduledReconnect()
-      }
       if (!state || state === lastConnectionState) return
       lastConnectionState = state
-      global.__saffulConnectionState = state
       const error = update.lastDisconnect?.error
       const reason = error ? ` — ${error?.message || error}` : ''
       process.stdout.write(`[boot] connection state: ${state}${reason}\n`)
@@ -405,50 +314,29 @@ const start = async () => {
       if (connection === 'open') process.stdout.write('[boot] connection open\n')
     })
 
-    socket.ev?.on?.('connection.update', (update = {}) => {
-      if (update.connection !== 'close') return
-      const code = disconnectCode(update)
-      if (code === 440) {
-        process.stdout.write('[uptime] An older socket was replaced; keeping the active connection without relinking.\n')
-        return
-      }
-      if (DO_NOT_RECONNECT_CODES.has(code)) {
-        reconnectBlocked = true
-        process.stdout.write(`[uptime] Session closed with non-reconnectable code ${code}; manual relink required.\n`)
-        return
-      }
-      // Baileys normally recycles a code-515 socket itself. The longer timer
-      // is only a fallback and is cancelled as soon as that socket reopens.
-      const delay = code === 515 ? 30000 : 10000
-      scheduleReconnect(`WhatsApp disconnected${code ? ` (code ${code})` : ''}`, delay)
-    })
-
     bootPhase = 'attach-hooks'
     attachProtection.installSocketRawCapture(socket)
     rebrandSocket(socket)
     preserveMobileNotifications(socket)
-    attachRawDispatcher(socket, { attachProtection, autoView, statusSave })
-    notifyConnectedOnce(socket)
-    process.stdout.write('[boot] hooks attached — ready\n')
-
-    // Register after the raw dispatcher so view-once wrappers are inspected
-    // before the normal command serializer unwraps them.
-    try {
-      require(__dirname + '/plugins/antiviewonce').attach(socket)
-    } catch (e) { process.stdout.write('[avo] Hook failed: ' + (e.message || e) + '\n') }
-
-    // ── Auto-Moderation Hooks ────────────────────────────────────────────
     try {
       require(__dirname + '/plugins/auto-moderation').attach(socket)
       process.stdout.write('[automod] Auto-moderation hooks installed\n')
-    } catch (e) { process.stdout.write('[automod] Hook failed: ' + e.message + '\n') }
+    } catch (hookError) { process.stdout.write('[automod] Hook failed: ' + (hookError?.message || hookError) + '\n') }
+    attachRawDispatcher(socket, { attachProtection, autoView, statusSave })
+    try {
+      require(__dirname + '/plugins/antiviewonce').attach(socket)
+    } catch (hookError) { process.stdout.write('[antiviewonce] Hook failed: ' + (hookError?.message || hookError) + '\n') }
+    try {
+      require(__dirname + '/plugins/safful-call-guard').attach(socket)
+    } catch (hookError) { process.stdout.write('[callguard] Hook failed: ' + (hookError?.message || hookError) + '\n') }
+    notifyConnectedOnce(socket)
+    process.stdout.write('[boot] hooks attached — ready\n')
 
     // Uptime Guardian activation
-    const RECONNECTABLE_CODES = new Set([408, 428, 503, 515])
+    const RECONNECTABLE_CODES = new Set([408, 515])
     let _guardianActivated = false
     socket.ev?.on?.('connection.update', (update = {}) => {
       if (update.connection === 'open') {
-        reconnectBlocked = false
         if (!_guardianActivated) { _guardianActivated = true; global.__saffulUptimeSuppress(0) }
         global.__saffulUptimeReconnected()
       }
@@ -461,102 +349,45 @@ const start = async () => {
       }
     })
 
-    // Memory Watchdog (installed once even when the socket reconnects)
-    if (!global.__saffulMemoryWatchdogInstalled) {
-      global.__saffulMemoryWatchdogInstalled = true
-      let sustainedHighMemoryChecks = 0
-      const softMemoryMB = Math.max(128, Number(process.env.SAFFUL_MEMORY_SOFT_MB || 450))
-      const hardMemoryMB = Math.max(softMemoryMB + 64, Number(process.env.SAFFUL_MEMORY_HARD_MB || 650))
-      const memoryCheck = setInterval(() => {
-        const memory = process.memoryUsage()
-        const heapMB = Math.round(memory.heapUsed / 1024 / 1024)
-        const rssMB = Math.round(memory.rss / 1024 / 1024)
-        const highMemory = Math.max(heapMB, rssMB)
-        if (highMemory >= softMemoryMB) {
-          process.stdout.write(`[uptime] Memory pressure: heap ${heapMB} MB, RSS ${rssMB} MB — trimming caches.\n`)
+    // Memory Watchdog (escalating — never kill on a transient spike)
+    let memHighPending = false
+    const memRecheck = () => {
+      const heapMB = Math.round(process.memoryUsage().heapUsed / 1024 / 1024)
+      if (heapMB > 800) {
+        process.stdout.write(`[uptime] memory still above 800 MB (${heapMB} MB) after gc — exiting for host restart\n`)
+        process.exit(1)
+      }
+      memHighPending = false
+      process.stdout.write(`[uptime] memory recovered to ${heapMB} MB after gc — no restart needed\n`)
+    }
+    const memoryCheck = setInterval(() => {
+      const heapMB = Math.round(process.memoryUsage().heapUsed / 1024 / 1024)
+      if (heapMB > 800) {
+        if (!memHighPending) {
+          memHighPending = true
+          process.stdout.write(`[uptime] heap at ${heapMB} MB — trimming store and forcing gc, rechecking in 60s\n`)
           try { if (typeof global.__saffulStoreTrim === 'function') global.__saffulStoreTrim() } catch {}
           if (global.gc) global.gc()
+          setTimeout(memRecheck, 60 * 1000)
         }
-        if (highMemory >= hardMemoryMB) sustainedHighMemoryChecks += 1
-        else sustainedHighMemoryChecks = 0
-        // Three five-minute checks prevent an OOM kill while avoiding needless
-        // recovery on a short-lived media conversion spike.
-        if (sustainedHighMemoryChecks >= 3) {
-          sustainedHighMemoryChecks = 0
-          process.stdout.write(`[uptime] Sustained memory pressure — recycling only the WhatsApp socket, not the bot process.\n`)
-          global.__saffulRecycleSocket?.('sustained memory pressure')
-        }
-      }, 5 * 60 * 1000)
-      memoryCheck.unref?.()
-      const gcInterval = setInterval(() => { if (global.gc) global.gc() }, 6 * 60 * 60 * 1000)
-      gcInterval.unref?.()
-    }
+      } else if (heapMB > 650) {
+        try { if (typeof global.__saffulStoreTrim === 'function') global.__saffulStoreTrim() } catch {}; if (global.gc) global.gc()
+      } else if (heapMB > 500) {
+        if (global.gc) global.gc()
+      }
+    }, 30 * 60 * 1000)
+    memoryCheck.unref?.()
+    const gcInterval = setInterval(() => { if (global.gc) global.gc() }, 6 * 60 * 60 * 1000)
+    gcInterval.unref?.()
 
   } catch (error) {
     process.stdout.write(`[boot] FAILED at '${bootPhase}': ${error?.stack || error}\n`)
     console.error('[startup] Failed to start Safful-Md:', error)
     if (global.__saffulAuthMethod === 'pairing') return
-    scheduleReconnect(`startup failed at ${bootPhase}`, 3000)
-  } finally {
-    startInFlight = false
+    // NOTE: intentionally NOT unref'd — a referenced timer keeps the process
+    // alive between attempts, so a failed boot retries instead of letting the
+    // event loop drain and exiting silently (which a host sees as a random stop).
+    setTimeout(() => void start(), 3000)
   }
 }
-
-// ── Stability: SIGTERM/SIGINT clean shutdown ──────────────────────────
-function cleanShutdown(signal) {
-  shutdownRequested = true
-  process.stdout.write(`[uptime] ${signal} received — cleaning up...\n`)
-  try { if (typeof sessionGuard?.backupNow === 'function') sessionGuard.backupNow() } catch {}
-  try {
-    const sock = global.__saffulLatestSocket
-    if (sock && typeof sock.end === 'function') sock.end()
-  } catch {}
-  process.stdout.write('[uptime] Shutdown complete\n')
-  process.exit(0)
-}
-process.on('SIGTERM', () => cleanShutdown('SIGTERM'))
-process.on('SIGINT', () => cleanShutdown('SIGINT'))
-
-// ── Stability: Express health endpoint for Pterodactyl ────────────────
-try {
-  const http = require('http')
-  const healthPort = parseInt(process.env.PORT || '0') || 8080
-  const healthServer = http.createServer((req, res) => {
-    if (req.url === '/health' || req.url === '/') {
-      const isAlive = lastConnectionState === 'open'
-      // Keep the process healthy while the WhatsApp socket is reconnecting.
-      // Some Node panels kill and restart apps on any non-200 probe response.
-      res.writeHead(200, { 'Content-Type': 'application/json' })
-      res.end(JSON.stringify({
-        status: isAlive ? 'ok' : 'disconnected',
-        connection: lastConnectionState,
-        uptime: Math.floor(process.uptime()),
-        memory: {
-          heapMB: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
-          rssMB: Math.round(process.memoryUsage().rss / 1024 / 1024),
-        },
-        bot: 'Safful-MD',
-      }))
-    } else {
-      res.writeHead(404)
-      res.end('Not Found')
-    }
-  })
-  healthServer.listen(healthPort, '0.0.0.0', () => {
-    process.stdout.write(`[health] Health server on http://0.0.0.0:${healthPort}/health\n`)
-  })
-  healthServer.on('error', (e) => {
-    process.stdout.write('[health] Could not start health server: ' + e.message + '\n')
-  })
-} catch {}
-
-// ── Stability: WhatsApp connection watchdog ────────────────────────────
-setInterval(() => {
-  try {
-    if (lastConnectionState !== 'open' && !reconnectBlocked) {
-      scheduleReconnect('watchdog found WhatsApp in state: ' + lastConnectionState, 1000)
-    }
-  } catch {}
-}, 60 * 1000)
-
 start()

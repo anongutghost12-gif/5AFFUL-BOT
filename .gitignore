@@ -1,34 +1,78 @@
+# ─────────────────────────────────────────────────────────────
+# Safful-MD — .gitignore
+# Secrets & credentials: if any of these ever show up in a diff,
+# treat it as a leak and rotate the credential immediately.
+# ─────────────────────────────────────────────────────────────
+
+# ── Node ─────────────────────────────────────────────────────
 node_modules/
-.safful-temp/
-.safful-data/
-.safful-secrets/
-lib/Safful_Session/
-lib/Suhail_Baileys
+
+# ── Local scratch (never deploy) ─────────────────────────────────
+video-frames/
 .freebuff/
-_freebuff/
-_plugin-sources/
-_5afful/
-_silentwolf/
-.git/
+.work/
+
+# ── Environment & secrets ────────────────────────────────────
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+npmrc
+.npmrc
+
+# ── WhatsApp auth / session state ────────────────────────────
+# Baileys multi-file auth state (creds.json + signal keys).
+# Matches by basename so it covers the session dir wherever the
+# (obfuscated) core decides to create it — lib/, root, etc.
+creds.json
+Suhail-X/
+Suhail-X*/
+Suhail_X/
+auth_info*/
+auth-state*/
+logged-out-*/
+*session*/
+registered/
+pre-key/
+sender-key/
+session/
+app-state/
+# Chat-history / store snapshots written by the in-memory store
+store.json
+
+# ── Bot runtime state & data ─────────────────────────────────
+.safful-data/
+botstate.json
+state.json
+*.db
+*.sqlite
+*.sqlite3
+
+# ── Logs ─────────────────────────────────────────────────────
+*.log
+msgprobe.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+pm2-*.log
+
+# ── Generated / temporary artifacts ──────────────────────────
 temp/
-__pycache__/
+lib/temp/
+video-frames/
+Thumbs.db
 
-# Build tools
-build.py
-obfuscate-plugins.js
-verify-plugins.js
-extract-sw-commands.js
-analyze-sw.js
-sandbox-sw.js
-decode-wolf.js
-analyze-uptime.js
+# ── Secret-bearing archives (never commit these) ─────────────
+Bot Test*.zip
+Bot Test ZIP/
 
-# Readable backup sources
-*.readable
-
-# Zip files
-*.zip
-
-# Large binaries
-*.exe
-*.msi
+# ── OS / editor junk ─────────────────────────────────────────
+.DS_Store
+desktop.ini
+*.swp
+*.swo
+*~
+.idea/
+.vscode/

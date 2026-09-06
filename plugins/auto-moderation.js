@@ -351,6 +351,7 @@ function attach(socket) {
     for (const raw of messages) {
       try {
         if (raw?.key?.fromMe) continue
+        if (global.saffulChatbotPaused === true) continue
         const chat = normalizeJid(raw?.key?.remoteJid)
         if (!chat.endsWith('@g.us')) continue
 
