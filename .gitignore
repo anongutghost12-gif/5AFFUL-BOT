@@ -43,6 +43,8 @@ store.json
 
 # ── Bot runtime state & data ─────────────────────────────────
 .safful-data/
+lib/safful-autoview.json
+lib/safful-autoview.json.tmp
 botstate.json
 state.json
 *.db
@@ -76,3 +78,6 @@ desktop.ini
 *~
 .idea/
 .vscode/
+
+# ── Build artifacts (never in the source tree) ───────────────
+*.zip

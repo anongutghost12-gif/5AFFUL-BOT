@@ -13,7 +13,7 @@ const fs = require('fs')
 const path = require('path')
 const { smd } = require('../lib/plugins')
 
-const STATE_FILE = path.join(__dirname, '..', 'lib', 'safful-autoview.json')
+const STATE_FILE = process.env.SAFFUL_AUTOVIEW_FILE || path.join(__dirname, '..', 'lib', 'safful-autoview.json')
 const RETRY_DELAY_MS = 30 * 1000
 
 const pending = new Map() // status key id -> { key, queuedAt, dueAt, retryAt }
@@ -22,13 +22,15 @@ let socket = null
 let mode = 'instant'
 let flushTimer = null
 let statusSave = null // resolved lazily — this file loads before ../lib exists
+let flushing = false
+let connected = false
 
 // ── persistence ────────────────────────────────────────────────────────────
 function normalizeMode(value) {
   const text = String(value || '').trim().toLowerCase()
+  if (text === 'on') return 'instant'
   if (!text || text === 'instant' || text === 'off') return text || 'instant'
-  const minutes = Number(text)
-  if (Number.isInteger(minutes) && minutes >= 1 && minutes <= 10) return String(minutes)
+  if (/^(?:[1-9]|10)$/.test(text)) return text
   return null
 }
 
@@ -44,18 +46,16 @@ function loadMode() {
     const normalized = normalizeMode(saved.mode)
     if (normalized) return normalized
   } catch {}
+  if (String(process.env.STATUS_VIEW_INTERVAL).trim() === '0') return 'off'
   const envMode = normalizeMode(process.env.STATUS_VIEW_INTERVAL ?? '')
-  if (envMode === '0') return 'off'
   return envMode || 'instant'
 }
 
-function saveMode() {
-  try {
-    fs.mkdirSync(path.dirname(STATE_FILE), { recursive: true })
-    const temporary = STATE_FILE + '.tmp'
-    fs.writeFileSync(temporary, JSON.stringify({ mode }, null, 2) + '\n', 'utf8')
-    fs.renameSync(temporary, STATE_FILE)
-  } catch (error) { console.error('[autoview] persist failed:', error.message || error) }
+function saveMode(next) {
+  fs.mkdirSync(path.dirname(STATE_FILE), { recursive: true })
+  const temporary = STATE_FILE + '.tmp'
+  fs.writeFileSync(temporary, JSON.stringify({ mode: next }, null, 2) + '\n', 'utf8')
+  fs.renameSync(temporary, STATE_FILE)
 }
 
 function remember(set, id) {
@@ -65,18 +65,19 @@ function remember(set, id) {
 
 // ── receipts ───────────────────────────────────────────────────────────────
 function statusSender(key) {
-  return key?.participantAlt || key?.participant || ''
+  return key?.participant || key?.participantAlt || ''
 }
 
-async function markSeen(key) {
+async function markSeen(target, key) {
   if (!key?.id) return
   const sender = statusSender(key)
   if (!sender) throw new Error('Status ' + key.id + ' has no sender JID; cannot mark seen.')
-  if (typeof socket?.sendReceipt === 'function') {
-    return socket.sendReceipt(sender, key.remoteJid || 'status@broadcast', [key.id], 'read')
+  if (typeof target?.sendReceipt === 'function') {
+    // Status receipts address the broadcast, with the author as participant.
+    return target.sendReceipt('status@broadcast', sender, [key.id], 'read')
   }
-  if (typeof socket?.readMessages === 'function') {
-    return socket.readMessages([key])
+  if (typeof target?.readMessages === 'function') {
+    return target.readMessages([{ ...key, remoteJid: 'status@broadcast', participant: sender }])
   }
   throw new Error('Connected socket supports neither sendReceipt nor readMessages.')
 }
@@ -84,24 +85,31 @@ async function markSeen(key) {
 // ── flush scheduling ───────────────────────────────────────────────────────
 function reschedule() {
   if (flushTimer) { clearTimeout(flushTimer); flushTimer = null }
-  if (mode === 'off' || !pending.size) return
+  if (mode === 'off' || !pending.size || !connected) return
   const now = Date.now()
   const nextDue = Math.min(...[...pending.values()].map(entry => entry.retryAt && entry.retryAt > now ? entry.retryAt : entry.dueAt))
   flushTimer = setTimeout(() => {
     flush({}).catch(error => console.error('[autoview] flush failed:', error.message || error))
-  }, Math.max(0, nextDue - now))
+  }, global.saffulChatbotPaused === true ? 1000 : Math.max(0, nextDue - now))
   flushTimer.unref?.()
 }
 
 async function flush({ force = false } = {}) {
-  if (mode === 'off' || !pending.size || !socket) return 0
+  if (flushing || mode === 'off' || !pending.size || !socket || !connected) return 0
+  if (global.saffulChatbotPaused === true) { reschedule(); return 0 }
+  flushing = true
+  const target = socket
   const now = Date.now()
   const due = [...pending.values()].filter(entry =>
     force || (entry.dueAt <= now && (!entry.retryAt || entry.retryAt <= now)))
   let seen = 0
   for (const entry of due) {
+    if (mode === 'off' || global.saffulChatbotPaused === true || target !== socket || !connected) break
+    if (pending.get(entry.key.id) !== entry) continue
+    if (!force && entry.dueAt > Date.now()) continue
     try {
-      await markSeen(entry.key)
+      await markSeen(target, entry.key)
+      remember(seenIds, entry.key.id)
       pending.delete(entry.key.id)
       seen += 1
     } catch (error) {
@@ -109,6 +117,7 @@ async function flush({ force = false } = {}) {
       console.error('[autoview] receipt failed for', entry.key.id + ':', error.message || error)
     }
   }
+  flushing = false
   if (seen) console.log('[autoview] sent status receipt(s) for', seen, 'status(es)')
   reschedule()
   return seen
@@ -117,9 +126,9 @@ async function flush({ force = false } = {}) {
 // ── mode switching ─────────────────────────────────────────────────────────
 function setMode(next) {
   const normalized = normalizeMode(next)
-  if (!normalized) throw new Error('Mode must be "instant", "off", or a delay from 1 to 10 minutes.')
+  if (!normalized) throw new Error('Use .autoview on, .autoview off, or .autoview 1-10. Zero is no longer supported.')
+  saveMode(normalized)
   mode = normalized
-  saveMode()
   if (mode === 'off') {
     pending.clear()
   } else {
@@ -144,7 +153,6 @@ function onMessages({ messages } = {}) {
     const ownerNumber = String(process.env.OWNER_NUMBER || global.owner || '').replace(/\D/g, '')
     if (ownerNumber && senderNumber && senderNumber === ownerNumber) continue
     if (pending.has(key.id) || seenIds.has(key.id)) continue
-    remember(seenIds, key.id)
     const delayMs = mode === 'instant' ? 0 : Number(mode) * 60 * 1000
     const queuedAt = Date.now()
     pending.set(key.id, {
@@ -152,6 +160,7 @@ function onMessages({ messages } = {}) {
       queuedAt,
       dueAt: queuedAt + delayMs,
     })
+    if (pending.size > 1000) pending.delete(pending.keys().next().value)
   }
   if (pending.size) {
     if (mode === 'instant') flush({}).catch(() => {})
@@ -163,6 +172,7 @@ function attach(target) {
   if (!target || target.__saffulAutoViewAttached) return target
   target.__saffulAutoViewAttached = true
   socket = target
+  connected = target.ws?.isOpen !== false
   if (!statusSave) {
     try { statusSave = require('../lib/safful-status-save') } catch { statusSave = null }
   }
@@ -171,6 +181,18 @@ function attach(target) {
   // otherwise fall back to the normal event.
   if (target.__saffulRawDispatcher?.onUpsert) target.__saffulRawDispatcher.onUpsert(onMessages)
   else target.ev?.on?.('messages.upsert', onMessages)
+  target.ev?.on?.('connection.update', update => {
+    if (socket !== target) return
+    if (update.connection === 'close') {
+      connected = false
+      if (flushTimer) clearTimeout(flushTimer)
+      flushTimer = null
+    } else if (update.connection === 'open') {
+      connected = true
+      reschedule()
+    }
+  })
+  reschedule()
   return target
 }
 
@@ -187,6 +209,7 @@ smd({
 
 module.exports = {
   getMode: () => mode,
+  normalizeMode,
   setMode,
   getMinutes: () => (mode === 'off' ? 0 : mode === 'instant' ? 0 : Number(mode)),
   setMinutes: minutes => setMode(Number(minutes) === 0 ? 'off' : String(minutes)),

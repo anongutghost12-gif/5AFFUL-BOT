@@ -1,7 +1,7 @@
 'use strict'
 
 const { cmd } = require('../lib/plugins')
-const { resolvePhone, phoneJid, ownerJids } = require('../lib/safful-identities')
+const { resolvePhone, phoneJid, ownerJids, normalizedJid, indexContacts, knownContacts } = require('../lib/safful-identities')
 
 function escapeVcard(value) {
   return String(value || '').replace(/\\/g, '\\\\').replace(/\r\n|\r|\n/g, '\\n').replace(/;/g, '\\;').replace(/,/g, '\\,')
@@ -34,18 +34,25 @@ function makeCsv(rows) {
     .map(row => row.map(cell).join(',')).join('\r\n') + '\r\n', 'utf8')
 }
 
-async function collectContacts(socket, metadata, store) {
+async function collectContacts(socket, metadata, store, extraContacts = []) {
   const rows = [], seen = new Set()
+  // Non-admin rosters often contain only LIDs. Contact records may be keyed
+  // by PN with a lid field, so direct dictionary lookup alone misses them.
+  const contacts = indexContacts(knownContacts(socket), store?.contacts, socket.contacts, extraContacts, metadata.participants)
   let unresolved = 0
   for (const participant of metadata.participants || []) {
-    const jid = await resolvePhone(socket, participant.phoneNumber, participant.jid, participant.id, participant.lid)
+    const record = typeof participant === 'string' ? { id: participant } : participant
+    const aliases = [record.id, record.lid, record.phoneNumber, record.jid].map(normalizedJid).filter(Boolean)
+    const matches = aliases.map(id => contacts.get(id)).filter(Boolean)
+    const jid = await resolvePhone(socket, record.phoneNumber, record.jid, record.id, record.lid,
+      ...matches.map(contact => contact.phoneNumber))
     if (!jid) { unresolved++; continue }
     if (seen.has(jid)) continue
     seen.add(jid)
-    const contact = store?.contacts?.[jid] || store?.contacts?.[participant.id] || socket.contacts?.[jid] || {}
+    const contact = contacts.get(jid) || matches[0] || {}
     const number = jid.split('@')[0]
-    const name = String(contact.name || contact.notify || contact.verifiedName || participant.name || participant.notify || `${metadata.subject || 'Group'} ${rows.length + 1}`).trim()
-    rows.push({ name, number, role: participant.admin || 'member' })
+    const name = String(contact.name || contact.notify || contact.verifiedName || record.name || record.notify || `${metadata.subject || 'Group'} ${rows.length + 1}`).trim()
+    rows.push({ name, number, role: record.admin || 'member' })
   }
   return { rows, unresolved }
 }
@@ -66,8 +73,23 @@ async function exportContacts(message, text, meta = {}) {
     return
   }
   try {
-    const metadata = await socket.groupMetadata(chat)
-    const { rows, unresolved } = await collectContacts(socket, metadata, meta.store)
+    let metadata = await socket.groupMetadata(chat)
+    let result = await collectContacts(socket, metadata, meta.store)
+    if ((result.unresolved || Number(metadata.size) > (metadata.participants || []).length) && typeof socket.groupFetchAllParticipating === 'function') {
+      try {
+        const groups = await socket.groupFetchAllParticipating()
+        const fresh = groups[chat]
+        if (fresh?.participants?.length) {
+          // Both sources are fresh server rosters. Use the more complete one,
+          // with phone mappings from the other, never an unrelated group.
+          const original = metadata
+          if (fresh.participants.length > (metadata.participants || []).length) metadata = { ...metadata, ...fresh }
+          const retry = await collectContacts(socket, metadata, meta.store, [...original.participants || [], ...fresh.participants])
+          if (retry.rows.length >= result.rows.length) result = retry
+        }
+      } catch (error) { process.stderr.write('[vcf] Full roster lookup failed: ' + error.message + '\n') }
+    }
+    const { rows, unresolved } = result
     if (!rows.length) {
       process.stderr.write('[vcf] no phone numbers available for ' + chat + ' (' + unresolved + ' unresolved)\n')
       return
@@ -76,7 +98,7 @@ async function exportContacts(message, text, meta = {}) {
     await socket.sendMessage(destination, {
       document: csv ? makeCsv(rows) : makeVcf(rows),
       mimetype: csv ? 'text/csv' : 'text/vcard', fileName: `${filename}.${csv ? 'csv' : 'vcf'}`,
-      caption: `${rows.length} contacts from ${metadata.subject || 'group'}${unresolved ? ` (${unresolved} skipped — no number exposed)` : ''}`,
+      caption: `${rows.length} contacts from ${metadata.subject || 'group'}${unresolved ? ` (${unresolved} unresolved: WhatsApp has not supplied a phone number or mapping; admin status is not required by this command)` : ''}`,
     })
   } catch (error) {
     process.stderr.write('[vcf] export failed: ' + (error?.message || error) + '\n')

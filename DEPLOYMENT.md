@@ -19,10 +19,11 @@ The archive excludes local credentials, `.env`, runtime data and `node_modules`.
 - `.rejectcall <number>`: reject that caller. `del <number>` or `clear` removes rules.
 - `.blockcall <number>`: apply a WhatsApp block, affecting messages as well as calls. `del <number>` and `clear` also unblock numbers in this bot's list.
 - `.calldnd on|off`: enable or disable rejection of all incoming calls. `.calldnd` shows counters.
+- `.autoview on`: view statuses immediately; `.autoview 1` through `.autoview 10`: delay in minutes; `.autoview off`: disable. `.autoview 0` is rejected without changing the mode.
 - `.antiviewonce on`, `.antiviewonce <number>`, `.antiviewonce status`: enable capture or inspect counters. Global `off` keeps individual contact rules; use `off <number>` to remove one.
 
 Call protection and media capture pause with `.chatbot off`. Handlers reattach after reconnects. View-once capture supports images, videos and voice notes when WhatsApp supplies the media. Failed downloads retry for five minutes. An unavailable notice without a media payload cannot itself be recovered; later payloads are processed if delivered.
 
 ## Verification
 
-Run `node --test tests/features.test.cjs` for regression tests. Tests cover contact resolution and private delivery, call signaling, reconnect attachment, event buffering, media re-upload and retry queues. Network calls are simulated; these checks do not establish successful operation against a live WhatsApp account.
+Run `node --test tests/*.test.cjs` for regression tests. Tests cover contact resolution and private delivery, notification guards, call signaling, reconnect attachment, event buffering, media re-upload, autoview modes and retry queues. Network calls are simulated; these checks do not establish successful operation against a live WhatsApp account.

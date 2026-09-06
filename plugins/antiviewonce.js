@@ -127,8 +127,11 @@ function remember(set, id) {
 
 function queueUnavailable(raw) {
   const id = raw?.key?.remoteJid + ':' + raw?.key?.id
-  if (!raw?.key?.id || processed.has(id) || retryQueue.has(id)) return
-  retryQueue.set(id, { raw, queuedAt: Date.now() })
+  if (!raw?.key?.id || processed.has(id)) return
+  const existing = retryQueue.get(id)
+  if (existing && !detectViewOnce(raw)) return
+  // Replace an unavailable notice when the real payload finally arrives.
+  retryQueue.set(id, { raw, queuedAt: existing?.queuedAt || Date.now() })
   if (retryQueue.size > 300) retryQueue.delete(retryQueue.keys().next().value)
 }
 
@@ -139,7 +142,8 @@ async function attemptQueued(entry) {
   if (!detected) return false
   const id = raw.key.remoteJid + ':' + raw.key.id
   // Captured by the live path in the meantime — nothing left to do.
-  if (processed.has(id) || pending.has(id)) return true
+  if (processed.has(id)) return true
+  if (pending.has(id)) return false
   if (global.saffulChatbotPaused === true || raw.key?.fromMe || raw.key?.remoteJid === 'status@broadcast') return false
   if (!activeSocket) return false
   pending.add(id)
@@ -164,7 +168,8 @@ function runRetryCycle() {
   const now = Date.now()
   for (const [id, entry] of retryQueue) {
     if (now - entry.queuedAt > RETRY_WINDOW_MS) { retryQueue.delete(id); continue }
-    if (processed.has(id) || pending.has(id)) { retryQueue.delete(id); continue }
+    if (processed.has(id)) { retryQueue.delete(id); continue }
+    if (pending.has(id)) continue
     void attemptQueued(entry).then(done => { if (done) retryQueue.delete(id) }).catch(() => {})
   }
 }

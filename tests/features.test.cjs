@@ -26,6 +26,7 @@ function setup(t) {
     const req = name => {
       if (name === 'module') return fakeModule
       if (name === './safful-mobile-notifications') return () => {}
+      if (name === '../plugins/statusauto.smd') return { attach: socket => { socket.__saffulAutoViewAttached = true } }
       if (name === '@whiskeysockets/baileys') return { ...baileys, downloadContentFromMessage: async (media, kind) => {
         state.downloads.push({media, kind})
         if (media.directPath === '/expired') throw Object.assign(new Error('expired'), { status: 410 })
@@ -150,6 +151,7 @@ test('socket factory attaches on every reconnect and serializer recognizes sudo 
   const factory=h.fakeModule._load('@whiskeysockets/baileys',parent).default
   const first=factory({}), second=factory({})
   assert.ok(first.__saffulAntiViewOnceAttached); assert.ok(second.__saffulAntiViewOnceAttached)
+  assert.ok(first.__saffulAutoViewAttached); assert.ok(second.__saffulAutoViewAttached)
   assert.equal(h.state.global.__saffulLatestSocket,second)
   const serializer=h.fakeModule._load('./serialized.js',parent)
   const owner=await serializer.smsg(second,{key:{remoteJid:'team@g.us',participant:'900001@lid'}})
