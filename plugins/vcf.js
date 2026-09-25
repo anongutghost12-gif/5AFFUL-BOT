@@ -57,15 +57,50 @@ async function collectContacts(socket, metadata, store, extraContacts = []) {
   return { rows, unresolved }
 }
 
+function contactSources(socket, store) {
+  return [knownContacts(socket), store?.contacts, socket?.contacts]
+}
+
+function contactRecords(source) {
+  if (source instanceof Map) return [...source.values()]
+  if (Array.isArray(source)) return source
+  return Object.values(source || {})
+}
+
+async function collectAllContacts(socket, store, groups = {}) {
+  const sources = contactSources(socket, store)
+  const roster = Object.values(groups || {}).flatMap(group => group?.participants || [])
+  const contacts = indexContacts(...sources, roster)
+  const rows = [], seen = new Set()
+  let unresolved = 0
+  for (const source of [...sources, roster]) for (const item of contactRecords(source)) {
+    const record = typeof item === 'string' ? { id: item } : item
+    const aliases = [record?.id, record?.lid, record?.phoneNumber, record?.jid, record?.pn]
+      .map(normalizedJid).filter(Boolean)
+    if (!aliases.length) continue
+    const matches = aliases.map(id => contacts.get(id)).filter(Boolean)
+    const jid = await resolvePhone(socket, ...aliases, ...matches.map(match => match.phoneNumber))
+    if (!jid) { unresolved++; continue }
+    if (seen.has(jid)) continue
+    seen.add(jid)
+    const contact = contacts.get(jid) || matches[0] || record
+    const number = jid.split('@')[0]
+    const name = String(contact.name || contact.notify || contact.verifiedName || record.name || record.notify || number).trim()
+    rows.push({ name, number, role: 'contact' })
+  }
+  return { rows, unresolved }
+}
+
 // Anyone in a group may run .vcf. It is fully silent: nothing is echoed back
 // to the chat — the VCF/CSV is pushed straight to the owner's (sudo) chat.
 // Failures are logged to the console only.
 async function exportContacts(message, text, meta = {}) {
   const socket = meta.Void || message.bot || global.__saffulLatestSocket
   const chat = message.chat || message.jid || message.key?.remoteJid
-  if (!String(chat).endsWith('@g.us')) return
   const args = String(text || '').trim().toLowerCase().split(/\s+/).filter(Boolean)
-  if (args.some(arg => !['vcf', 'csv', 'excel', 'sudo', 'personal', 'me'].includes(arg))) return
+  if (args.some(arg => !['vcf', 'csv', 'excel', 'sudo', 'personal', 'me', 'all'].includes(arg))) return
+  const all = args.includes('all')
+  if (!all && !String(chat).endsWith('@g.us')) return
   const csv = args.includes('csv') || args.includes('excel')
   const destination = ownerJids(socket)[0] || phoneJid(socket.user?.id) || socket.user?.id
   if (!destination || !/@(?:s\.whatsapp\.net|lid)$/.test(destination)) {
@@ -73,6 +108,25 @@ async function exportContacts(message, text, meta = {}) {
     return
   }
   try {
+    if (all) {
+      let groups = {}
+      if (typeof socket.groupFetchAllParticipating === 'function') {
+        try { groups = await socket.groupFetchAllParticipating() || {} }
+        catch (error) { process.stderr.write('[vcf] Group roster lookup failed: ' + error.message + '\n') }
+      }
+      const { rows, unresolved } = await collectAllContacts(socket, meta.store, groups)
+      if (!rows.length) {
+        process.stderr.write('[vcf] no exportable contact numbers available (' + unresolved + ' unresolved)\n')
+        return
+      }
+      await socket.sendMessage(destination, {
+        document: csv ? makeCsv(rows) : makeVcf(rows),
+        mimetype: csv ? 'text/csv' : 'text/vcard',
+        fileName: `all-known-contacts.${csv ? 'csv' : 'vcf'}`,
+        caption: `${rows.length} known contacts${unresolved ? ` (${unresolved} entries without a supplied phone mapping skipped)` : ''}`,
+      })
+      return
+    }
     let metadata = await socket.groupMetadata(chat)
     let result = await collectContacts(socket, metadata, meta.store)
     if ((result.unresolved || Number(metadata.size) > (metadata.participants || []).length) && typeof socket.groupFetchAllParticipating === 'function') {
@@ -105,5 +159,5 @@ async function exportContacts(message, text, meta = {}) {
   }
 }
 
-cmd({ pattern: 'vcf', alias: ['groupcontacts', 'exportcontacts'], category: 'group', desc: 'Export this group\'s contacts to the owner as VCF or Excel-compatible CSV (silent)', filename: __filename }, exportContacts)
-module.exports = { collectContacts, makeVcf, makeCsv, exportContacts }
+cmd({ pattern: 'vcf', alias: ['groupcontacts', 'exportcontacts'], category: 'group', desc: 'Export group or all known contacts to sudo as VCF or Excel-compatible CSV (silent)', filename: __filename }, exportContacts)
+module.exports = { collectContacts, collectAllContacts, makeVcf, makeCsv, exportContacts }
