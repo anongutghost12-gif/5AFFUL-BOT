@@ -98,7 +98,7 @@ async function exportContacts(message, text, meta = {}) {
   const socket = meta.Void || message.bot || global.__saffulLatestSocket
   const chat = message.chat || message.jid || message.key?.remoteJid
   const args = String(text || '').trim().toLowerCase().split(/\s+/).filter(Boolean)
-  if (args.some(arg => !['vcf', 'csv', 'excel', 'sudo', 'personal', 'me', 'all'].includes(arg))) return
+  if (args.some(arg => !['vcf', 'csv', 'excel', 'sudo', 'personal', 'me', 'all', 'group'].includes(arg))) return
   const all = args.includes('all')
   if (!all && !String(chat).endsWith('@g.us')) return
   const csv = args.includes('csv') || args.includes('excel')
@@ -159,5 +159,5 @@ async function exportContacts(message, text, meta = {}) {
   }
 }
 
-cmd({ pattern: 'vcf', alias: ['groupcontacts', 'exportcontacts'], category: 'group', desc: 'Export group or all known contacts to sudo as VCF or Excel-compatible CSV (silent)', filename: __filename }, exportContacts)
+cmd({ pattern: 'vcf', alias: ['groupvcf', 'groupcontacts', 'exportcontacts'], category: 'group', desc: 'Export this group with .vcf group, or all known contacts with .vcf all; add csv for spreadsheet (silent)', filename: __filename }, exportContacts)
 module.exports = { collectContacts, collectAllContacts, makeVcf, makeCsv, exportContacts }

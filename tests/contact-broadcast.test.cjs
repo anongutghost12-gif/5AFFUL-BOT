@@ -59,3 +59,20 @@ test('broadcast targets all known contacts and participating groups, excluding o
     '233240000002@s.whatsapp.net', '233240000003@s.whatsapp.net', '233240000004@s.whatsapp.net',
   ])
 })
+
+test('vcf group exports only the current group, not the full contact cache', async () => {
+  const vcf = load('plugins/vcf.js')
+  const sent = []
+  const socket = {
+    user: { id: '233240000001@s.whatsapp.net' },
+    contacts: [{ id: '233240000099@s.whatsapp.net', name: 'Unrelated' }],
+    groupMetadata: async () => ({ subject: 'Team', participants: [{ id: '233240000002@s.whatsapp.net', name: 'Member' }] }),
+    sendMessage: async (...args) => sent.push(args),
+  }
+  await vcf.exportContacts({ chat: 'team@g.us', bot: socket }, 'group csv')
+  assert.equal(sent.length, 1)
+  assert.equal(sent[0][1].fileName, 'Team.csv')
+  const csv = sent[0][1].document.toString('utf8')
+  assert.match(csv, /233240000002/)
+  assert.doesNotMatch(csv, /233240000099/)
+})

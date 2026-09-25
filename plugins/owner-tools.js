@@ -53,7 +53,7 @@ function scheduleControlledRestart(delayMs = 2500) {
   setTimeout(() => process.exit(1), delayMs).unref?.()
 }
 
-async function runUpdate(message) {
+async function runUpdate(message, { restart = true } = {}) {
   if (!fs.existsSync(path.join(PROJECT_ROOT, '.git'))) {
     return message.reply('❌ Update unavailable: this installation has no `.git` folder. Install from the GitHub repository first.')
   }
@@ -75,7 +75,12 @@ async function runUpdate(message) {
   if (!countsResult.ok) return message.reply(`❌ Could not compare updates.\n${shortResult(countsResult)}`)
   const [ahead = 0, behind = 0] = String(countsResult.stdout).trim().split(/\s+/).map(Number)
   if (ahead > 0) return message.reply(`❌ Update cancelled: this installation has ${ahead} local commit(s) not on GitHub.`)
-  if (!behind) return message.reply('✅ The bot is already up to date. Your session backup is safe.')
+  if (!behind) {
+    if (!restart) return message.reply('✅ Repository is already up to date. Session preserved.')
+    await message.reply('✅ Repository is already up to date. Restarting to load the installed code; session preserved.')
+    scheduleControlledRestart()
+    return
+  }
 
   await message.reply(`⬇️ Installing ${behind} update commit(s)…`)
   const pullResult = await runProcess('git', ['pull', '--ff-only', 'origin', branch])
@@ -93,8 +98,12 @@ async function runUpdate(message) {
   }
 
   try { await sessionGuard.backupSession() } catch {}
-  await message.reply('✅ Update installed and session preserved. Restarting once to load the new code…')
-  scheduleControlledRestart()
+  if (restart) {
+    await message.reply('✅ Update installed and session preserved. Restarting once to load the new code…')
+    scheduleControlledRestart()
+  } else {
+    await message.reply('✅ Repository pulled and session preserved. Use `.update` to load the new code.')
+  }
 }
 
 cmd({

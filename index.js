@@ -31,7 +31,7 @@ const __uptime = {
   origExit: process.exit.bind(process),
 }
 process.exit = function (code) {
-  if (__uptime.active && __uptime.suppressUntil > Date.now() && code !== 0) {
+  if (!global.__saffulAllowHardExit && __uptime.active && __uptime.suppressUntil > Date.now() && code !== 0) {
     process.stdout.write('[uptime] Suppressing process.exit(' + code + ') — reconnectable disconnect.\n')
     return
   }
