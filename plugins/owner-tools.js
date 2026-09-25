@@ -39,6 +39,58 @@ function shortResult(result, maxLength = 500) {
   return String(result?.stderr || result?.stdout || result?.message || 'Unknown error').trim().slice(0, maxLength)
 }
 
+function pathsFromGit(result) {
+  return String(result.stdout || '').split('\0').filter(Boolean)
+}
+
+function safeProjectFile(relative, root = PROJECT_ROOT) {
+  if (!relative || path.isAbsolute(relative) || relative.split(/[\\/]/).includes('..')) return null
+  const absolute = path.resolve(root, relative)
+  const inside = path.relative(root, absolute)
+  return inside && !inside.startsWith('..') && !path.isAbsolute(inside) ? absolute : null
+}
+
+function moveUntrackedCollisions(root, collisions) {
+  if (!collisions.length) return { moved: [], directory: null }
+  const directory = path.join(root, '.safful-data', 'update-conflicts', `${Date.now()}-${process.pid}`)
+  const moved = []
+  try {
+    for (const relative of collisions) {
+      const source = safeProjectFile(relative, root)
+      const destination = path.resolve(directory, relative)
+      const inside = path.relative(directory, destination)
+      const real = source && fs.existsSync(source) ? fs.realpathSync(source) : null
+      const realInside = real && path.relative(root, real)
+      if (!source || !inside || inside.startsWith('..') || path.isAbsolute(inside) ||
+          !realInside || realInside.startsWith('..') || path.isAbsolute(realInside) ||
+          !fs.lstatSync(source).isFile()) {
+        throw new Error(`Unsafe untracked collision: ${relative}`)
+      }
+      fs.mkdirSync(path.dirname(destination), { recursive: true })
+      fs.renameSync(source, destination)
+      moved.push({ source, destination, relative })
+    }
+  } catch (error) {
+    for (const item of moved.reverse()) fs.renameSync(item.destination, item.source)
+    throw error
+  }
+  return { moved, directory }
+}
+
+async function protectUntrackedCollisions(branch) {
+  const incoming = await runProcess('git', ['diff', '--name-only', '--diff-filter=A', '-z', 'HEAD', `origin/${branch}`], 30000)
+  const untracked = await runProcess('git', ['ls-files', '--others', '--exclude-standard', '-z'], 30000)
+  if (!incoming.ok || !untracked.ok) throw new Error('Could not inspect incoming files and local untracked files safely')
+  const additions = new Set(pathsFromGit(incoming))
+  return moveUntrackedCollisions(PROJECT_ROOT, pathsFromGit(untracked).filter(name => additions.has(name)))
+}
+
+function restoreUntrackedCollisions(backup) {
+  for (const item of backup.moved) {
+    if (!fs.existsSync(item.source)) fs.renameSync(item.destination, item.source)
+  }
+}
+
 async function protectSession(label) {
   const backup = sessionStore.snapshot(label)
   if (!backup.saved) return backup
@@ -83,8 +135,18 @@ async function runUpdate(message, { restart = true } = {}) {
   }
 
   await message.reply(`⬇️ Installing ${behind} update commit(s)…`)
+  let collisionBackup
+  try { collisionBackup = await protectUntrackedCollisions(branch) }
+  catch (error) { return message.reply(`❌ Update cancelled before pull: ${error.message}`) }
   const pullResult = await runProcess('git', ['pull', '--ff-only', 'origin', branch])
-  if (!pullResult.ok) return message.reply(`❌ Git pull failed; the bot was not restarted.\n${shortResult(pullResult)}`)
+  if (!pullResult.ok) {
+    restoreUntrackedCollisions(collisionBackup)
+    return message.reply(`❌ Git pull failed; the bot was not restarted.\n${shortResult(pullResult)}`)
+  }
+
+  if (collisionBackup.moved.length) {
+    await message.reply(`📦 Preserved ${collisionBackup.moved.length} conflicting untracked file(s) in ${path.relative(PROJECT_ROOT, collisionBackup.directory)}.`)
+  }
 
   const restored = sessionStore.restoreLatestIfNeeded()
   if (!restored.current) {
@@ -156,4 +218,7 @@ module.exports = {
   runUpdate,
   scheduleControlledRestart,
   shortResult,
+  protectUntrackedCollisions,
+  restoreUntrackedCollisions,
+  moveUntrackedCollisions,
 }
