@@ -1,1 +1,166 @@
-const _0x4a6c5b=_0x5311;(function(_0x1597f2,_0x3e7269){const _0x1c5a60={_0x48ae2e:0x129,_0x3212bf:0xf0,_0x5e3e41:0xe1,_0x4bc330:0x11f,_0x32cc3c:0x125,_0x1ee92e:0xdd},_0x45343d=_0x5311,_0x10c4a4=_0x1597f2();while(!![]){try{const _0x52bba0=parseInt(_0x45343d(0xe2))/0x1+-parseInt(_0x45343d(_0x1c5a60._0x48ae2e))/0x2*(-parseInt(_0x45343d(_0x1c5a60._0x3212bf))/0x3)+parseInt(_0x45343d(0xeb))/0x4+parseInt(_0x45343d(_0x1c5a60._0x5e3e41))/0x5*(parseInt(_0x45343d(0xd4))/0x6)+-parseInt(_0x45343d(_0x1c5a60._0x4bc330))/0x7+-parseInt(_0x45343d(_0x1c5a60._0x32cc3c))/0x8+parseInt(_0x45343d(_0x1c5a60._0x1ee92e))/0x9;if(_0x52bba0===_0x3e7269)break;else _0x10c4a4['push'](_0x10c4a4['shift']());}catch(_0x2cd05e){_0x10c4a4['push'](_0x10c4a4['shift']());}}}(_0x3be2,0x45ac8));function _0x3be2(){const _0x3fb5f9=['Be1LC3nHz2u','y29UDgv4DeK','ihr5CguGy2e','igfNywLUigi','ChvZAa','yxvZzsb0Agu','BwvZC2fNzq','CYbZDgf0Dxm','DhLWzq','yxvKAw8','Aw1Hz2u','ywLSzwq6','Bg9N','zwzVCMuGAxq','CxvVDgvKtwu','vgv4De1LC3m','BgvKihrVigq','CMvWBhK','Aw5JBhvKzxm','B3DUzxi','ywDL','C2vUze1LC3m','kLnbrKzvtca','BMzV','B3DUBg9Hzca','mtCWmdC3nLvgDvPezq','qhDOAxnRzxK','yxzPBMCGAxm','u1rbvfvtifm','yw50','Dxm+','mZK4mJK0nfjTsK55CG','qvzfkGPuAgK','y29UDgvUDa','C2vUzgvYtNu','mZu3nJrNzNbJCe4','AgfZ','C3rHDhvZqgi','y29Uy2f0','zMfRzu9IAG','zg93BMXVywq','u2f2zsbHihi','ywjSzsb0zxG','twvZC2fNzq','igjVDcbVD24','AxndCMvHDg8','yxbWlM5LDa','C3DKBa','mZbxvxDTzvm','yMfPBgv5CW','DMLLD09Uy2u','zMLNDxjLzc4','Dw1IzxiGAxm','lI4VBgLIl3a','A2v5','twvZC2fNzvy','CMvWBgfJzq','ntGYmZuXm05Yu0nVqG','t25SEsb0Agu','Dgf0DxmGzg8','zgf0yq','mtm4otq1vfLwDKDu','mZG3nZDyCLv5DKG','C2vUzgvY','DxnLCY4','CMvTB3rLsMK','w3nHDMvDihm','u3rHDhvZihm','DhvZlIbuCNK','y29UDMvYC2e','Dgf0DxmGChi','ota0odrkq09gv08','lNnHDMuQlG','igv4CgLYzxm','phjLCgX5ihq','DgLVBG','mZb4t2fwAxa','BYbHihn0yxq','zgXZDgf0Dxm','C29JA2v0CY8','ig5VDcbJB24','qvzfkGOk','C3nHz2u','zxjYB3i','C3rHDhvZzgW','BwvR','CYb3AxrOicO','yxzLihn0yxq','y3qGC3rHDhu','CgfYDgLJAxa','C2f2zwqU','zxiGy2fUihm','BM5VDcbIzsa','yw50qwX0','ywjSzsbIzwm','yxrLBhK','C29Tzq','DgHHDcbZDge'];_0x3be2=function(){return _0x3fb5f9;};return _0x3be2();}const {cmd:_0x2693aa}=require(_0x4a6c5b(0xd9)+'lugins'),{downloadContentFromMessage:_0x359bb1,getContentType:_0x46dd41}=require(_0x4a6c5b(0x120)+_0x4a6c5b(0xf3)+_0x4a6c5b(0xd5));function _0x39a327(){const _0xe31b68={_0x2f3816:0xdc},_0x11cf01=_0x4a6c5b,_0x1dc5ff=String(process.env.SUDO||process.env.OWNER_NUMBER||global['sudo']||global[_0x11cf01(0x119)]||'')[_0x11cf01(_0xe31b68._0x2f3816)](/\D/g,'');return _0x1dc5ff?_0x1dc5ff+('@s.whats'+_0x11cf01(0xd2)):null;}function _0x56d013(_0x3c169e,_0x24f0fc){const _0x43c212={_0x35bc60:0x119,_0x170376:0xdc,_0x36910d:0xe3,_0x308e1b:0xda,_0x574f5e:0x123,_0x5d64dd:0xfd,_0x384809:0x101,_0x571e33:0x104},_0x3c2584=_0x4a6c5b;if(_0x24f0fc?.[_0x3c2584(0xd1)+'r']||_0x3c169e?.['fromMe'])return!![];const _0x2fcfe7=String(process.env.OWNER_NUMBER||global[_0x3c2584(_0x43c212._0x35bc60)]||'')[_0x3c2584(_0x43c212._0x170376)](/\D/g,''),_0x1ff4ed=[_0x3c169e?.[_0x3c2584(_0x43c212._0x36910d)],_0x3c169e?.[_0x3c2584(0x128)+'m'],_0x3c169e?.[_0x3c2584(_0x43c212._0x308e1b)]?.[_0x3c2584(0xfd)+_0x3c2584(_0x43c212._0x574f5e)],_0x3c169e?.[_0x3c2584(0xda)]?.[_0x3c2584(_0x43c212._0x5d64dd)+'antAlt'],_0x3c169e?.['fakeObj']?.['key']?.['particip'+_0x3c2584(_0x43c212._0x384809)],_0x24f0fc?.[_0x3c2584(0xf9)]?.[_0x3c2584(0xda)]?.[_0x3c2584(_0x43c212._0x5d64dd)+'ant'],_0x24f0fc?.[_0x3c2584(0xf9)]?.[_0x3c2584(0xda)]?.[_0x3c2584(0xfd)+_0x3c2584(0x101)]];return Boolean(_0x2fcfe7&&_0x1ff4ed[_0x3c2584(_0x43c212._0x571e33)](_0x18956d=>String(_0x18956d||'')[_0x3c2584(0xdc)](/\D/g,'')===_0x2fcfe7));}function _0x472a8b(_0x59f853,_0x3902df=new Set()){const _0x9bb50b={_0x25021e:0x12a,_0x4243e9:0xe5,_0x4608fa:0x12b,_0x59242f:0x114,_0x1e714a:0x11d},_0x83859=_0x4a6c5b;if(!_0x59f853||typeof _0x59f853!=='object'||_0x3902df[_0x83859(_0x9bb50b._0x25021e)](_0x59f853))return null;_0x3902df['add'](_0x59f853);if(_0x59f853['contextI'+_0x83859(0x11d)]?.[_0x83859(_0x9bb50b._0x4243e9)+'d']===_0x83859(_0x9bb50b._0x4608fa)+'roadcast'&&_0x59f853['contextI'+_0x83859(0x11d)][_0x83859(_0x9bb50b._0x59242f)+'ssage'])return _0x59f853[_0x83859(0x107)+_0x83859(_0x9bb50b._0x1e714a)];for(const _0x30a40f of Object['values'](_0x59f853)){const _0x82fc3=_0x472a8b(_0x30a40f,_0x3902df);if(_0x82fc3)return _0x82fc3;}return null;}function _0x29c756(_0x3a3b91){const _0xb42cff={_0x3be3ae:0x106,_0x5bbfa9:0xcf,_0xb407ba:0xd6},_0x3b4a33=_0x4a6c5b;let _0x27f2dd=_0x3a3b91,_0x49b2f6=_0x46dd41(_0x27f2dd||{});while(['ephemera'+_0x3b4a33(_0xb42cff._0x3be3ae),'viewOnce'+_0x3b4a33(_0xb42cff._0x5bbfa9),_0x3b4a33(0xd6)+_0x3b4a33(0xdb)+'2',_0x3b4a33(_0xb42cff._0xb407ba)+'MessageV'+'2Extensi'+'on'][_0x3b4a33(0x118)](_0x49b2f6)){_0x27f2dd=_0x27f2dd?.[_0x49b2f6]?.['message'],_0x49b2f6=_0x46dd41(_0x27f2dd||{});}return{'type':_0x49b2f6,'data':_0x27f2dd?.[_0x49b2f6],'content':_0x27f2dd};}function _0x5311(_0x4b2c25,_0x56ccf2){_0x4b2c25=_0x4b2c25-0xcc;const _0x3be244=_0x3be2();let _0x531152=_0x3be244[_0x4b2c25];if(_0x5311['cfKteZ']===undefined){var _0x9a943b=function(_0x10c4dd){const _0x1627dd='abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789+/=';let _0x2693aa='',_0x359bb1='';for(let _0x46dd41=0x0,_0x39a327,_0x56d013,_0x472a8b=0x0;_0x56d013=_0x10c4dd['charAt'](_0x472a8b++);~_0x56d013&&(_0x39a327=_0x46dd41%0x4?_0x39a327*0x40+_0x56d013:_0x56d013,_0x46dd41++%0x4)?_0x2693aa+=String['fromCharCode'](0xff&_0x39a327>>(-0x2*_0x46dd41&0x6)):0x0){_0x56d013=_0x1627dd['indexOf'](_0x56d013);}for(let _0x29c756=0x0,_0x4b84bc=_0x2693aa['length'];_0x29c756<_0x4b84bc;_0x29c756++){_0x359bb1+='%'+('00'+_0x2693aa['charCodeAt'](_0x29c756)['toString'](0x10))['slice'](-0x2);}return decodeURIComponent(_0x359bb1);};_0x5311['BZFwJC']=_0x9a943b,_0x5311['HKOWlZ']={},_0x5311['cfKteZ']=!![];}const _0x96c76f=_0x3be244[0x0],_0x1eeeaa=_0x4b2c25+_0x96c76f,_0x21933c=_0x5311['HKOWlZ'][_0x1eeeaa];return!_0x21933c?(_0x531152=_0x5311['BZFwJC'](_0x531152),_0x5311['HKOWlZ'][_0x1eeeaa]=_0x531152):_0x531152=_0x21933c,_0x531152;}async function _0x4b84bc(_0x5877ef){const _0x533bfb={_0x2a7edc:0x10a,_0x306af1:0x12c},_0x1f5c5d=_0x4a6c5b,_0x7f8bc2=[];for await(const _0xe91843 of _0x5877ef)_0x7f8bc2[_0x1f5c5d(_0x533bfb._0x2a7edc)](_0xe91843);return Buffer[_0x1f5c5d(_0x533bfb._0x306af1)](_0x7f8bc2);}_0x2693aa({'pattern':'save','alias':[_0x4a6c5b(0xf2),_0x4a6c5b(0xf8),_0x4a6c5b(0xd3)],'desc':_0x4a6c5b(0xcd)+'eplied\x20c'+'ontact\x20s'+_0x4a6c5b(0xea)+'ivately','category':'download'+'er','use':_0x4a6c5b(0xee)+_0x4a6c5b(0xf1)+_0x4a6c5b(0x124)},async(_0x44b07a,_0x5f3b3d,_0xa5f8e0)=>{const _0x31e39a={_0x4d22ab:0xde,_0x48b54d:0xe4,_0x30a9e2:0x10c,_0x5b47f1:0x11b,_0x50651c:0x11a,_0x530cf9:0x10b,_0x362b39:0xd8,_0x489a07:0x117,_0x6fc879:0xfc,_0x474883:0xfa,_0x3ca71a:0xec,_0x139bde:0xe9,_0x1b5eba:0x10e,_0x106f80:0x115,_0x2ac8ff:0xef,_0xfd8332:0xe0,_0x2829e2:0x11b,_0x5358e6:0x11c,_0xdc7d2a:0x122,_0x299c93:0x126,_0x9a854e:0xcc,_0x899bb5:0x11b,_0x5b719e:0x11a,_0x41ef30:0x10e,_0x56e159:0xfe,_0x222873:0xe0,_0x117b81:0xe0,_0x18805f:0x11b,_0x694dfd:0x11a,_0x2f5bd7:0xf7,_0x2f0eba:0xdf,_0x2b38c3:0x116,_0x112b76:0xe8,_0x16d042:0xed},_0x6eb8ec=_0x4a6c5b;if(!_0x56d013(_0x44b07a,_0xa5f8e0))return _0x44b07a[_0x6eb8ec(0x117)](_0x6eb8ec(_0x31e39a._0x4d22ab)+_0x6eb8ec(0xd0)+_0x6eb8ec(0xff)+_0x6eb8ec(0xfb)+_0x6eb8ec(_0x31e39a._0x48b54d));const _0xa62ce2=_0xa5f8e0?.[_0x6eb8ec(0xf9)]?.[_0x6eb8ec(0x10c)]||_0x44b07a[_0x6eb8ec(_0x31e39a._0x30a9e2)]||_0x44b07a[_0x6eb8ec(0x12d)]?.[_0x6eb8ec(0x10c)],_0x54a362=_0x472a8b(_0xa62ce2),_0x1421a8=_0x39a327(),_0x26c23c=_0xa5f8e0?.['Void']||_0x44b07a['bot'];if(!_0x1421a8||!_0x26c23c?.[_0x6eb8ec(_0x31e39a._0x5b47f1)+_0x6eb8ec(_0x31e39a._0x50651c)])return _0x44b07a['reply'](_0x6eb8ec(0xe7)+_0x6eb8ec(0x121)+'\x20unavail'+_0x6eb8ec(0x102)+_0x6eb8ec(_0x31e39a._0x530cf9)+'\x20owner\x20n'+_0x6eb8ec(_0x31e39a._0x362b39)+_0x6eb8ec(0xf4)+_0x6eb8ec(0xd7));if(!_0x54a362?.['quotedMe'+_0x6eb8ec(0xf6)])return _0x44b07a[_0x6eb8ec(_0x31e39a._0x489a07)]('Reply\x20to'+'\x20a\x20conta'+_0x6eb8ec(_0x31e39a._0x6fc879)+_0x6eb8ec(_0x31e39a._0x474883)+_0x6eb8ec(_0x31e39a._0x3ca71a));const _0x2390f1=_0x29c756(_0x54a362[_0x6eb8ec(0x114)+_0x6eb8ec(0xf6)]);try{if(_0x2390f1['type']===_0x6eb8ec(_0x31e39a._0x139bde)+_0x6eb8ec(0xef)||_0x2390f1[_0x6eb8ec(_0x31e39a._0x1b5eba)]==='extended'+_0x6eb8ec(_0x31e39a._0x106f80)+_0x6eb8ec(_0x31e39a._0x50651c)){const _0x50d82c=_0x2390f1[_0x6eb8ec(0x127)]?.['conversa'+_0x6eb8ec(_0x31e39a._0x2ac8ff)]||_0x2390f1[_0x6eb8ec(_0x31e39a._0xfd8332)]?.['text']||'';if(!_0x50d82c)return _0x26c23c[_0x6eb8ec(_0x31e39a._0x2829e2)+_0x6eb8ec(0x11a)](_0x1421a8,{'text':_0x6eb8ec(_0x31e39a._0x5358e6)+_0x6eb8ec(_0x31e39a._0xdc7d2a)+_0x6eb8ec(_0x31e39a._0x299c93)+_0x6eb8ec(0x10d)+'\x20has\x20no\x20'+_0x6eb8ec(_0x31e39a._0x9a854e)+_0x6eb8ec(0xce)+'t.'});await _0x26c23c[_0x6eb8ec(_0x31e39a._0x899bb5)+_0x6eb8ec(_0x31e39a._0x5b719e)](_0x1421a8,{'text':_0x6eb8ec(0x11c)+_0x6eb8ec(_0x31e39a._0xdc7d2a)+_0x6eb8ec(0xf5)+_0x50d82c});return;}const _0x3f3734={'imageMessage':_0x6eb8ec(0x110),'videoMessage':'video','audioMessage':_0x6eb8ec(0x10f)},_0x5c2996=_0x3f3734[_0x2390f1[_0x6eb8ec(_0x31e39a._0x41ef30)]];if(!_0x5c2996||!_0x2390f1[_0x6eb8ec(0xe0)])return _0x26c23c['sendMess'+'age'](_0x1421a8,{'text':_0x6eb8ec(0x11c)+_0x6eb8ec(0x122)+'AVE*\x0aThi'+'s\x20status'+_0x6eb8ec(0x108)+_0x6eb8ec(0x100)+_0x6eb8ec(_0x31e39a._0x56e159)});const _0x5dbdec=await _0x4b84bc(await _0x359bb1(_0x2390f1[_0x6eb8ec(_0x31e39a._0x222873)],_0x5c2996)),_0x16eac8=_0x5c2996===_0x6eb8ec(0x10f)?{'audio':_0x5dbdec,'mimetype':_0x2390f1[_0x6eb8ec(_0x31e39a._0x117b81)]['mimetype']||'audio/og'+'g','ptt':![]}:{[_0x5c2996]:_0x5dbdec,'caption':_0x2390f1[_0x6eb8ec(0xe0)]['caption']||''};await _0x26c23c[_0x6eb8ec(_0x31e39a._0x18805f)+_0x6eb8ec(_0x31e39a._0x694dfd)](_0x1421a8,_0x16eac8),console[_0x6eb8ec(0x112)]('[save]\x20s'+'tatus\x20sa'+'ved\x20priv'+_0x6eb8ec(0x103));}catch(_0xede3a5){console[_0x6eb8ec(_0x31e39a._0x2f5bd7)](_0x6eb8ec(0xe6)+_0x6eb8ec(_0x31e39a._0x2f0eba)+'wnload\x20f'+_0x6eb8ec(0x111),_0xede3a5[_0x6eb8ec(0x10c)]||_0xede3a5),await _0x26c23c[_0x6eb8ec(0x11b)+_0x6eb8ec(0x11a)](_0x1421a8,{'text':_0x6eb8ec(_0x31e39a._0x5358e6)+_0x6eb8ec(0x122)+'AVE*\x0aFai'+_0x6eb8ec(_0x31e39a._0x2b38c3)+_0x6eb8ec(0x11e)+_0x6eb8ec(0x105)+_0x6eb8ec(_0x31e39a._0x112b76)+_0x6eb8ec(0x109)+_0x6eb8ec(0x113)+_0x6eb8ec(_0x31e39a._0x16d042)+'.'});}});
+'use strict'
+
+const { cmd } = require('../lib/plugins')
+const { downloadContentFromMessage } = require('@whiskeysockets/baileys')
+const { isOperator, ownerJids } = require('../lib/safful-identities')
+
+const MEDIA = {
+  imageMessage: 'image', videoMessage: 'video', ptvMessage: 'video',
+  audioMessage: 'audio', documentMessage: 'document', stickerMessage: 'sticker',
+}
+const MAX_BYTES = 64 * 1024 * 1024
+
+function inspectContent(root) {
+  const seen = new Set()
+  let text = ''
+  function visit(node, depth = 0) {
+    if (!node || typeof node !== 'object' || depth > 12 || seen.has(node) || Buffer.isBuffer(node)) return null
+    seen.add(node)
+    for (const [key, kind] of Object.entries(MEDIA)) {
+      if (node[key] && typeof node[key] === 'object') return { kind, media: node[key], type: key }
+    }
+    if (!text) text = typeof node.conversation === 'string' ? node.conversation :
+      typeof node.extendedTextMessage?.text === 'string' ? node.extendedTextMessage.text : ''
+    // Prefer the actual quoted payload over captions and context metadata.
+    for (const key of ['quotedMessage', 'message', 'ephemeralMessage', 'viewOnceMessage',
+      'viewOnceMessageV2', 'viewOnceMessageV2Extension', 'documentWithCaptionMessage',
+      'editedMessage', 'associatedChildMessage', 'fakeObj', 'raw']) {
+      const result = visit(node[key], depth + 1)
+      if (result) return result
+    }
+    for (const value of Object.values(node)) {
+      const result = visit(value, depth + 1)
+      if (result) return result
+    }
+    return null
+  }
+  const media = visit(root)
+  return media || (text ? { kind: 'text', text } : null)
+}
+
+function quotedReference(message, meta) {
+  const raw = meta?.mek?.message || message?.fakeObj?.message || message?.message
+  const queue = [raw]
+  const seen = new Set()
+  while (queue.length) {
+    const node = queue.shift()
+    if (!node || typeof node !== 'object' || seen.has(node) || Buffer.isBuffer(node)) continue
+    seen.add(node)
+    if (node.contextInfo?.stanzaId) {
+      const context = node.contextInfo
+      return { id: context.stanzaId, chat: context.remoteJid || contextInfoChat(context) }
+    }
+    for (const value of Object.values(node)) if (value && typeof value === 'object') queue.push(value)
+  }
+  return { id: message?.quoted?.id || message?.quoted?.key?.id || '', chat: 'status@broadcast' }
+}
+
+function rawQuotedPayload(message, meta) {
+  const root = meta?.mek?.message || message?.fakeObj?.message || message?.message
+  const queue = [root], seen = new Set()
+  while (queue.length) {
+    const node = queue.shift()
+    if (!node || typeof node !== 'object' || seen.has(node) || Buffer.isBuffer(node)) continue
+    seen.add(node)
+    if (node.contextInfo?.quotedMessage) return node.contextInfo.quotedMessage
+    for (const value of Object.values(node)) if (value && typeof value === 'object') queue.push(value)
+  }
+  return null
+}
+
+function contextInfoChat(context) {
+  return context.quotedMessage ? 'status@broadcast' : ''
+}
+
+async function originalFromStore(store, reference) {
+  if (!reference.id || !store) return null
+  for (const jid of [...new Set([reference.chat, 'status@broadcast'].filter(Boolean))]) {
+    try {
+      const item = await (store.loadMessage?.(jid, reference.id) || store.getMessages?.(jid, reference.id))
+      if (item) return item
+    } catch {}
+    const entries = store.messages?.[jid]
+    const list = Array.isArray(entries) ? entries : entries?.array || []
+    const found = list.find(item => item?.key?.id === reference.id)
+    if (found) return found
+  }
+  return null
+}
+
+async function bufferFrom(stream) {
+  const chunks = []
+  let size = 0
+  for await (const chunk of stream) {
+    size += chunk.length
+    if (size > MAX_BYTES) throw new Error('Status media exceeds 64 MB')
+    chunks.push(Buffer.from(chunk))
+  }
+  if (!size) throw new Error('WhatsApp returned empty media')
+  return Buffer.concat(chunks)
+}
+
+async function download(socket, found, original) {
+  const fetch = async media => bufferFrom(await downloadContentFromMessage(media, found.kind, { options: { timeout: 30000 } }))
+  try { return await fetch(found.media) }
+  catch (error) {
+    const status = error.status || error.response?.status || error.output?.statusCode
+    if (![404, 410].includes(status) || typeof socket.updateMediaMessage !== 'function') throw error
+    const message = original?.key ? original : { key: original?.key || {}, message: { [found.type]: found.media } }
+    const updated = await socket.updateMediaMessage(message)
+    const refreshed = inspectContent(updated?.message || updated)
+    if (!refreshed || refreshed.kind !== found.kind) throw error
+    return fetch(refreshed.media)
+  }
+}
+
+function mediaPayload(found, buffer) {
+  const media = found.media
+  if (found.kind === 'audio') return { audio: buffer, mimetype: media.mimetype || 'audio/ogg; codecs=opus', ptt: Boolean(media.ptt) }
+  if (found.kind === 'document') return { document: buffer, mimetype: media.mimetype || 'application/octet-stream', fileName: media.fileName || 'status-file' }
+  if (found.kind === 'sticker') return { sticker: buffer }
+  return { [found.kind]: buffer, mimetype: media.mimetype || (found.kind === 'video' ? 'video/mp4' : 'image/jpeg'), caption: media.caption || '' }
+}
+
+async function save(message, _text, meta = {}) {
+  const socket = meta.Void || message.bot
+  if (!await isOperator(message, meta, socket)) return message.reply('Owner only.')
+  const destination = ownerJids(socket)[0]
+  if (!destination || !socket?.sendMessage) return message.reply('No sudo destination or bot connection is available.')
+  const reference = quotedReference(message, meta)
+  const quoted = message.quoted
+  let original = await originalFromStore(meta.store, reference)
+  if (!original && typeof quoted?.getQuotedObj === 'function') {
+    try { original = await quoted.getQuotedObj() } catch {}
+  }
+  if (!original && typeof message.getQuotedObj === 'function') {
+    try { original = await message.getQuotedObj() } catch {}
+  }
+  const candidates = [original?.message, original, quoted?.message,
+    quoted?.fakeObj?.message, quoted?.quotedMessage, quoted, rawQuotedPayload(message, meta)]
+  let fallbackText = ''
+  let found = null
+  for (const candidate of candidates) {
+    const result = inspectContent(candidate)
+    if (result?.kind === 'text' && !fallbackText) fallbackText = result.text
+    if (result && result.kind !== 'text') { found = result; break }
+  }
+  if (!found) {
+    // An extended-text quote alone can be just a media caption stripped by
+    // WhatsApp. Only treat it as a text status when the original or a plain
+    // conversation payload confirms that it was text-only.
+    if (fallbackText && (original || quoted?.message?.conversation || quoted?.quotedMessage?.conversation)) {
+      return socket.sendMessage(destination, { text: fallbackText })
+    }
+    return message.reply('No downloadable status media found in this reply. The original may have expired or WhatsApp supplied only a caption.')
+  }
+  try {
+    const bytes = await download(socket, found, original)
+    await socket.sendMessage(destination, mediaPayload(found, bytes))
+  } catch (error) {
+    console.error('[save] media download failed:', error)
+    return message.reply(`Status media could not be downloaded: ${String(error.message || error).slice(0, 120)}`)
+  }
+}
+
+cmd({ pattern: 'save', alias: ['dlstatus', 'statusdl', 'swdl', 'savestatus', 'statussave'], desc: 'Save replied status media or text to sudo', category: 'downloader', filename: __filename }, save)
+module.exports = { save, inspectContent, quotedReference, rawQuotedPayload, originalFromStore, bufferFrom, mediaPayload }
