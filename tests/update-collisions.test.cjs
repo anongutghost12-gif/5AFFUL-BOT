@@ -21,7 +21,78 @@ vm.runInNewContext(fs.readFileSync(filename, 'utf8'), {
     return native(key)
   },
 }, { filename })
-const { moveUntrackedCollisions, restoreUntrackedCollisions, resolveUpdateBranch } = moduleStub.exports
+const { moveUntrackedCollisions, restoreUntrackedCollisions, resolveUpdateBranch, initializeCheckout } = moduleStub.exports
+const { spawnSync } = require('child_process')
+
+function unbornFixture(t) {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'safful-gitinit-'))
+  t.after(() => fs.rmSync(temp, { recursive: true, force: true }))
+  const upstream = path.join(temp, 'upstream'), root = path.join(temp, 'zip-install')
+  fs.mkdirSync(upstream); fs.mkdirSync(root)
+  const git = (cwd, args) => {
+    const result = spawnSync('git', args, { cwd, encoding: 'utf8', windowsHide: true })
+    return { ok: result.status === 0, stdout: result.stdout || '', stderr: result.stderr || result.error?.message || '' }
+  }
+  const must = (cwd, args) => { const result = git(cwd, args); assert.equal(result.ok, true, result.stderr); return result }
+  must(upstream, ['init', '-b', 'main'])
+  fs.writeFileSync(path.join(upstream, 'README.md'), 'new readme')
+  fs.mkdirSync(path.join(upstream, 'plugins'))
+  fs.writeFileSync(path.join(upstream, 'plugins', 'bot.js'), 'new code')
+  fs.writeFileSync(path.join(upstream, '.gitignore'), 'ignored.txt\n.env\nlib/Safful_Session/\n')
+  fs.writeFileSync(path.join(upstream, 'ignored.txt'), 'upstream ignored file')
+  must(upstream, ['add', '-f', '.'])
+  must(upstream, ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-m', 'fixture'])
+  fs.writeFileSync(path.join(root, 'README.md'), 'custom local readme')
+  fs.mkdirSync(path.join(root, 'plugins'))
+  fs.writeFileSync(path.join(root, 'plugins', 'bot.js'), 'old code')
+  fs.writeFileSync(path.join(root, '.gitignore'), 'ignored.txt\n.env\nlib/Safful_Session/\n')
+  fs.writeFileSync(path.join(root, 'ignored.txt'), 'local ignored file')
+  fs.writeFileSync(path.join(root, '.env'), 'local secret')
+  fs.mkdirSync(path.join(root, 'lib', 'Safful_Session'), { recursive: true })
+  fs.writeFileSync(path.join(root, 'lib', 'Safful_Session', 'creds.json'), '{"registered":true}')
+  must(root, ['init'])
+  must(root, ['remote', 'add', 'origin', upstream])
+  must(root, ['fetch', 'origin', '+refs/heads/main:refs/remotes/origin/main'])
+  return { root, git, must, run: async (_command, args) => git(root, args) }
+}
+
+test('ZIP and failed-init recovery backs up conflicts including ignored files and establishes HEAD without touching session', async t => {
+  const h = unbornFixture(t)
+  const before = h.git(h.root, ['checkout', '-b', 'main', '--track', 'origin/main'])
+  assert.equal(before.ok, false)
+  const backup = await initializeCheckout('main', h)
+  assert.equal(backup.moved.length, 4)
+  assert.equal(fs.readFileSync(path.join(h.root, 'README.md'), 'utf8'), 'new readme')
+  assert.equal(fs.readFileSync(path.join(backup.directory, 'README.md'), 'utf8'), 'custom local readme')
+  assert.equal(fs.readFileSync(path.join(backup.directory, 'ignored.txt'), 'utf8'), 'local ignored file')
+  assert.equal(fs.readFileSync(path.join(h.root, '.env'), 'utf8'), 'local secret')
+  assert.equal(fs.readFileSync(path.join(h.root, 'lib/Safful_Session/creds.json'), 'utf8'), '{"registered":true}')
+  h.must(h.root, ['rev-parse', '--verify', 'HEAD'])
+  h.must(h.root, ['rev-list', '--left-right', '--count', 'HEAD...origin/main'])
+  await assert.rejects(initializeCheckout('main', h), /already has a commit/)
+})
+
+test('failed bootstrap checkout restores displaced files', async t => {
+  const h = unbornFixture(t)
+  const run = async (command, args) => args[0] === 'checkout'
+    ? { ok: false, stderr: 'simulated checkout failure' } : h.run(command, args)
+  await assert.rejects(initializeCheckout('main', { root: h.root, run }), /Checkout failed/)
+  assert.equal(fs.readFileSync(path.join(h.root, 'README.md'), 'utf8'), 'custom local readme')
+  assert.equal(fs.readFileSync(path.join(h.root, 'ignored.txt'), 'utf8'), 'local ignored file')
+})
+
+test('bootstrap refuses staged files and protected paths before moving anything', async t => {
+  const h = unbornFixture(t)
+  h.must(h.root, ['add', 'README.md'])
+  await assert.rejects(initializeCheckout('main', h), /staged files/)
+  const run = async (_command, args) => {
+    if (args[0] === 'rev-parse') return { ok: false }
+    if (args[0] === 'ls-files') return { ok: true, stdout: '' }
+    return { ok: true, stdout: 'README.md\0lib/Safful_Session/creds.json\0' }
+  }
+  await assert.rejects(initializeCheckout('main', { root: h.root, run }), /protected or unsafe/)
+  assert.equal(fs.readFileSync(path.join(h.root, 'README.md'), 'utf8'), 'custom local readme')
+})
 
 test('master checkouts select published main when origin/master does not exist', async () => {
   const calls = []

@@ -68,9 +68,26 @@ function statusSender(key) {
   return key?.participant || key?.participantAlt || ''
 }
 
+function normalizedAuthor(value) {
+  const jid = String(value || '').replace(/:\d+@/, '@')
+  return /^\d+@(?:s\.whatsapp\.net|lid)$/.test(jid) ? jid : ''
+}
+
+async function accountAuthor(target, key) {
+  const authors = [key.participantAlt, key.participant].map(normalizedAuthor).filter(Boolean)
+  const phone = authors.find(jid => jid.endsWith('@s.whatsapp.net'))
+  if (phone) return phone
+  const lid = authors.find(jid => jid.endsWith('@lid'))
+  if (lid && target.signalRepository?.lidMapping?.getPNForLID) {
+    const mapped = normalizedAuthor(await target.signalRepository.lidMapping.getPNForLID(lid))
+    if (mapped.endsWith('@s.whatsapp.net')) return mapped
+  }
+  return lid || ''
+}
+
 async function markSeen(target, key, progress = {}) {
   if (!key?.id) return
-  const sender = statusSender(key)
+  const sender = normalizedAuthor(key.participant) || normalizedAuthor(key.participantAlt)
   if (!sender) throw new Error('Status ' + key.id + ' has no sender JID; cannot mark seen.')
   if (typeof target?.sendReceipt === 'function') {
     // Status receipts address the broadcast, with the author as participant.
@@ -78,15 +95,27 @@ async function markSeen(target, key, progress = {}) {
       await target.sendReceipt('status@broadcast', sender, [key.id], 'read')
       progress.authorRead = true
     }
-    // Account-side read sync is separate from the author's view notification.
-    // A failed sync can retry without notifying the author a second time.
-    await target.sendReceipt('status@broadcast', sender, [key.id], 'read-self')
+    // Use the supplied/mapped phone identity for account-side receipts where
+    // available. Do not manufacture a phone number from a LID. Sending a
+    // receipt does not confirm the primary phone's viewed-status UI changed.
+    const accountSender = await accountAuthor(target, key)
+    if (!accountSender) throw new Error('Status author identity is unavailable for account receipt')
+    await target.sendReceipt('status@broadcast', accountSender, [key.id], 'read-self')
+    updateLocalStatus(target, key)
     return
   }
   if (typeof target?.readMessages === 'function') {
-    return target.readMessages([{ ...key, remoteJid: 'status@broadcast', participant: sender }])
+    const accountSender = await accountAuthor(target, key)
+    await target.readMessages([{ ...key, remoteJid: 'status@broadcast', participant: accountSender || sender }])
+    updateLocalStatus(target, key)
+    return
   }
   throw new Error('Connected socket supports neither sendReceipt nor readMessages.')
+}
+
+function updateLocalStatus(target, key) {
+  // Keep the bot store consistent. This is a local update, not a phone-sync ACK.
+  target.ev?.emit?.('messages.update', [{ key: { ...key }, update: { statusAlreadyViewed: true } }])
 }
 
 // ── flush scheduling ───────────────────────────────────────────────────────
@@ -125,7 +154,7 @@ async function flush({ force = false } = {}) {
     }
   }
   flushing = false
-  if (seen) console.log('[autoview] sent status receipt(s) for', seen, 'status(es)')
+  if (seen) console.log('[autoview] sent status receipt(s) for', seen, 'status(es); primary-phone UI sync is not confirmed')
   reschedule()
   return seen
 }
@@ -154,7 +183,7 @@ function onMessages({ messages } = {}) {
   if (global.saffulChatbotPaused === true || mode === 'off' || !socket) return
   for (const message of messages || []) {
     const key = message?.key
-    if (!key?.id || key.remoteJid !== 'status@broadcast' || key.fromMe) continue
+    if (!key?.id || key.remoteJid !== 'status@broadcast' || key.fromMe || message.statusAlreadyViewed) continue
     // Never auto-view the owner's own statuses.
     const senderNumber = String(statusSender(key)).split('@')[0].replace(/\D/g, '')
     const ownerNumber = String(process.env.OWNER_NUMBER || global.owner || '').replace(/\D/g, '')

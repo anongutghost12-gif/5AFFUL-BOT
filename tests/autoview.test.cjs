@@ -54,6 +54,7 @@ test('on views immediately using correct broadcast receipt; duplicates are skipp
   s.ev.emit('messages.upsert',{messages:[status('a')]});await settle()
   assert.equal(s.receipts.length,1);assert.equal(s.receipts[0][0],'status@broadcast');assert.equal(s.receipts[0][1],'900003@lid');assert.equal(s.receipts[0][3],'read')
   assert.equal(s.selfReceipts.length,1);assert.equal(s.selfReceipts[0][3],'read-self')
+  assert.equal(s.selfReceipts[0][1],'233240000003@s.whatsapp.net')
   s.ev.emit('messages.upsert',{messages:[status('a')]});await settle();assert.equal(s.receipts.length,1)
 })
 
@@ -116,4 +117,56 @@ test('account read sync retries without duplicating the author view receipt',asy
   failSelf=false;await h.tick(30000)
   assert.equal(s.receipts.length,1);assert.equal(s.selfReceipts.length,1)
   assert.equal(h.engine._pending.size,0)
+})
+
+test('mapped LID account receipt retries without repeating author read and updates local store only on success',async t=>{
+  const h=setup(t),s=h.socket(),updates=[];h.engine.attach(s);h.engine.setMode('on')
+  s.ev.on('messages.update',items=>updates.push(...items))
+  let unavailable=true
+  s.signalRepository={lidMapping:{getPNForLID:async lid=>{
+    assert.equal(lid,'900003@lid')
+    if(unavailable)throw new Error('mapping unavailable')
+    return '233240000003:8@s.whatsapp.net'
+  }}}
+  const incoming=status('mapped');delete incoming.key.participantAlt
+  s.ev.emit('messages.upsert',{messages:[incoming]});await settle()
+  assert.equal(s.receipts.length,1);assert.equal(s.selfReceipts.length,0);assert.equal(updates.length,0)
+  unavailable=false;await h.tick(30000)
+  assert.equal(s.receipts.length,1);assert.equal(s.selfReceipts[0][1],'233240000003@s.whatsapp.net')
+  assert.equal(updates[0].key.id,'mapped');assert.equal(updates[0].update.statusAlreadyViewed,true)
+})
+
+test('already-viewed statuses are skipped and native readMessages fallback uses canonical author',async t=>{
+  const h=setup(t),s=h.socket(),reads=[],updates=[]
+  delete s.sendReceipt;s.readMessages=async keys=>reads.push(...keys)
+  s.ev.on('messages.update',items=>updates.push(...items))
+  h.engine.attach(s);h.engine.setMode('on')
+  s.ev.emit('messages.upsert',{messages:[{...status('viewed'),statusAlreadyViewed:true},status('new')]});await settle()
+  assert.equal(reads.length,1);assert.equal(reads[0].id,'new')
+  assert.equal(reads[0].participant,'233240000003@s.whatsapp.net');assert.equal(updates.length,1)
+})
+
+test('actual Baileys receipt encoder preserves broadcast routing through the DM notification guard',async t=>{
+  const h=setup(t),s=h.socket(),nodes=[]
+  const baileysDir=path.dirname(require.resolve('@whiskeysockets/baileys'))
+  const source=fs.readFileSync(path.join(baileysDir,'Socket/messages-send.js'),'utf8')
+  const start=source.indexOf('const sendReceipt = async'),end=source.indexOf('/** Correctly bulk send receipts',start)
+  assert.ok(start>=0 && end>start)
+  const mod={exports:{}}
+  vm.runInNewContext(source.slice(start,end)+'\nmodule.exports=sendReceipt',{
+    module:mod,sendNode:async node=>nodes.push(node),unixTimestampSeconds:()=>123,
+    logger:{debug(){}},Boom:Error,isPnUser:jid=>jid.endsWith('@s.whatsapp.net'),isLidUser:jid=>jid.endsWith('@lid'),
+  })
+  s.sendReceipt=mod.exports
+  require('../lib/safful-mobile-notifications')(s)
+  h.engine.attach(s);h.engine.setMode('on')
+  const incoming=status('wire');incoming.key.participant='900003:5@lid'
+  s.ev.emit('messages.upsert',{messages:[incoming]});await settle()
+  assert.equal(nodes.length,2)
+  assert.equal(nodes[0].attrs.to,'status@broadcast');assert.equal(nodes[0].attrs.participant,'900003@lid')
+  assert.equal(nodes[0].attrs.type,'read')
+  assert.equal(nodes[1].attrs.to,'status@broadcast');assert.equal(nodes[1].attrs.participant,'233240000003@s.whatsapp.net')
+  assert.equal(nodes[1].attrs.type,'read-self');assert.equal(nodes[1].attrs.id,'wire')
+  await s.sendReceipt('233240000003@s.whatsapp.net',undefined,['dm'],'read')
+  assert.equal(nodes.length,2)
 })

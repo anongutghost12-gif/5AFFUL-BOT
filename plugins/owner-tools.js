@@ -115,6 +115,33 @@ async function resolveUpdateBranch(currentBranch, run = runProcess) {
   return null
 }
 
+async function initializeCheckout(branch, { root = PROJECT_ROOT, run = runProcess } = {}) {
+  // This recovery is only for an unborn repository, never an existing checkout.
+  const head = await run('git', ['rev-parse', '--verify', 'HEAD'], 30000)
+  if (head.ok) throw new Error('Repository already has a commit; use the normal update path')
+  const index = await run('git', ['ls-files', '--stage', '-z'], 30000)
+  if (!index.ok || pathsFromGit(index).length) throw new Error('Initialization cancelled: the index contains staged files or could not be inspected')
+  const tree = await run('git', ['ls-tree', '-r', '--name-only', '-z', `origin/${branch}`], 30000)
+  if (!tree.ok) throw new Error('Could not inspect the fetched repository')
+  const incoming = pathsFromGit(tree)
+  // Repository files must never replace authentication, local configuration, or backups.
+  for (const name of incoming) {
+    if (!safeProjectFile(name, root) || /^(?:\.git|\.env|\.safful-data|\.safful-secrets|node_modules)(?:\/|$)/i.test(name) ||
+        /^lib\/(?:Safful_Session|Suhail_Baileys)(?:\/|$)/i.test(name)) {
+      throw new Error(`Initialization cancelled: protected or unsafe incoming path ${name}`)
+    }
+  }
+  const backup = moveUntrackedCollisions(root, incoming.filter(name => fs.existsSync(safeProjectFile(name, root))))
+  const checkout = await run('git', ['checkout', '-B', branch, '--track', `origin/${branch}`], 60000)
+  if (!checkout.ok) {
+    restoreUntrackedCollisions(backup)
+    throw new Error(`Checkout failed; conflicting files were preserved: ${shortResult(checkout)}`)
+  }
+  const verified = await run('git', ['rev-parse', '--verify', 'HEAD'], 30000)
+  if (!verified.ok) throw new Error('Checkout did not produce a valid HEAD; do not restart')
+  return backup
+}
+
 async function runUpdate(message, { restart = true } = {}) {
   if (!fs.existsSync(path.join(PROJECT_ROOT, '.git'))) {
     return message.reply('❌ Update unavailable: this installation has no `.git` folder. Install from the GitHub repository first.')
@@ -143,6 +170,9 @@ async function runUpdate(message, { restart = true } = {}) {
     scheduleControlledRestart()
     return
   }
+
+  const head = await runProcess('git', ['rev-parse', '--verify', 'HEAD'], 30000)
+  if (!head.ok) return message.reply('❌ Git initialization is incomplete (no local HEAD commit). Run `.gitinit` to safely finish setup, then `.update`.')
 
   await message.reply(`⬇️ Installing ${behind} update commit(s)…`)
   let collisionBackup
@@ -232,4 +262,5 @@ module.exports = {
   restoreUntrackedCollisions,
   moveUntrackedCollisions,
   resolveUpdateBranch,
+  initializeCheckout,
 }
