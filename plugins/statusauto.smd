@@ -68,13 +68,20 @@ function statusSender(key) {
   return key?.participant || key?.participantAlt || ''
 }
 
-async function markSeen(target, key) {
+async function markSeen(target, key, progress = {}) {
   if (!key?.id) return
   const sender = statusSender(key)
   if (!sender) throw new Error('Status ' + key.id + ' has no sender JID; cannot mark seen.')
   if (typeof target?.sendReceipt === 'function') {
     // Status receipts address the broadcast, with the author as participant.
-    return target.sendReceipt('status@broadcast', sender, [key.id], 'read')
+    if (!progress.authorRead) {
+      await target.sendReceipt('status@broadcast', sender, [key.id], 'read')
+      progress.authorRead = true
+    }
+    // Account-side read sync is separate from the author's view notification.
+    // A failed sync can retry without notifying the author a second time.
+    await target.sendReceipt('status@broadcast', sender, [key.id], 'read-self')
+    return
   }
   if (typeof target?.readMessages === 'function') {
     return target.readMessages([{ ...key, remoteJid: 'status@broadcast', participant: sender }])
@@ -108,7 +115,7 @@ async function flush({ force = false } = {}) {
     if (pending.get(entry.key.id) !== entry) continue
     if (!force && entry.dueAt > Date.now()) continue
     try {
-      await markSeen(target, entry.key)
+      await markSeen(target, entry.key, entry)
       remember(seenIds, entry.key.id)
       pending.delete(entry.key.id)
       seen += 1

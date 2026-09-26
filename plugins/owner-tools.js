@@ -105,6 +105,16 @@ function scheduleControlledRestart(delayMs = 2500) {
   setTimeout(() => process.exit(1), delayMs).unref?.()
 }
 
+async function resolveUpdateBranch(currentBranch, run = runProcess) {
+  const candidates = [...new Set([process.env.GIT_BRANCH, 'main', currentBranch].filter(Boolean))]
+  for (const branch of candidates) {
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9._/-]*$/.test(branch) || branch.includes('..')) continue
+    const result = await run('git', ['rev-parse', '--verify', `refs/remotes/origin/${branch}`], 30000)
+    if (result.ok) return branch
+  }
+  return null
+}
+
 async function runUpdate(message, { restart = true } = {}) {
   if (!fs.existsSync(path.join(PROJECT_ROOT, '.git'))) {
     return message.reply('❌ Update unavailable: this installation has no `.git` folder. Install from the GitHub repository first.')
@@ -120,8 +130,8 @@ async function runUpdate(message, { restart = true } = {}) {
   if (!fetchResult.ok) return message.reply(`❌ Git fetch failed.\n${shortResult(fetchResult)}`)
 
   const branchResult = await runProcess('git', ['branch', '--show-current'], 30000)
-  const branch = String(branchResult.stdout || '').trim()
-  if (!branch) return message.reply('❌ Update cancelled: the repository is in detached-HEAD mode.')
+  const branch = await resolveUpdateBranch(String(branchResult.stdout || '').trim())
+  if (!branch) return message.reply('Update cancelled: no published update branch was found on origin.')
 
   const countsResult = await runProcess('git', ['rev-list', '--left-right', '--count', `HEAD...origin/${branch}`], 30000)
   if (!countsResult.ok) return message.reply(`❌ Could not compare updates.\n${shortResult(countsResult)}`)
@@ -221,4 +231,5 @@ module.exports = {
   protectUntrackedCollisions,
   restoreUntrackedCollisions,
   moveUntrackedCollisions,
+  resolveUpdateBranch,
 }

@@ -21,7 +21,17 @@ vm.runInNewContext(fs.readFileSync(filename, 'utf8'), {
     return native(key)
   },
 }, { filename })
-const { moveUntrackedCollisions, restoreUntrackedCollisions } = moduleStub.exports
+const { moveUntrackedCollisions, restoreUntrackedCollisions, resolveUpdateBranch } = moduleStub.exports
+
+test('master checkouts select published main when origin/master does not exist', async () => {
+  const calls = []
+  const branch = await resolveUpdateBranch('master', async (_command, args) => {
+    calls.push(args.at(-1))
+    return { ok: args.at(-1) === 'refs/remotes/origin/main' }
+  })
+  assert.equal(branch, 'main')
+  assert.equal(calls.includes('refs/remotes/origin/master'), false)
+})
 
 test('update preserves only the exact colliding untracked file and can restore on pull failure', t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'safful-update-test-'))

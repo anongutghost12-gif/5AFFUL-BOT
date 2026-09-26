@@ -30,7 +30,8 @@ function setup(t, saved) {
   load('plugins/autoview.js', {'../lib/plugins':plugins,'./statusauto.smd':engine,
     '../lib/safful-identities':{isOperator:async m=>Boolean(m.fromMe)}})
   function socket() {
-    const s={ev:new EventEmitter(), receipts:[], sendReceipt:async(...args)=>s.receipts.push(args)}
+    const s={ev:new EventEmitter(), receipts:[], selfReceipts:[], sendReceipt:async(...args)=>
+      (args[3]==='read-self'?s.selfReceipts:s.receipts).push(args)}
     return s
   }
   async function tick(ms) {
@@ -52,6 +53,7 @@ test('on views immediately using correct broadcast receipt; duplicates are skipp
   const h=setup(t),s=h.socket();h.engine.attach(s);h.engine.setMode('on')
   s.ev.emit('messages.upsert',{messages:[status('a')]});await settle()
   assert.equal(s.receipts.length,1);assert.equal(s.receipts[0][0],'status@broadcast');assert.equal(s.receipts[0][1],'900003@lid');assert.equal(s.receipts[0][3],'read')
+  assert.equal(s.selfReceipts.length,1);assert.equal(s.selfReceipts[0][3],'read-self')
   s.ev.emit('messages.upsert',{messages:[status('a')]});await settle();assert.equal(s.receipts.length,1)
 })
 
@@ -78,7 +80,7 @@ test('switching to on views queued statuses; pause prevents delayed viewing unti
 test('overlapping instant batches do not duplicate receipts; failures retry on replacement socket',async t=>{
   const h=setup(t),s=h.socket();h.engine.attach(s);h.engine.setMode('on')
   let release;const gate=new Promise(resolve=>{release=resolve})
-  s.sendReceipt=async(...args)=>{s.receipts.push(args);await gate}
+  s.sendReceipt=async(...args)=>{(args[3]==='read-self'?s.selfReceipts:s.receipts).push(args);await gate}
   s.ev.emit('messages.upsert',{messages:[status('one')]});s.ev.emit('messages.upsert',{messages:[status('two')]})
   assert.equal(s.receipts.length,1);release();await settle();await h.tick(0);assert.equal(s.receipts.length,2)
   s.sendReceipt=async()=>{throw new Error('connection lost')}
@@ -97,4 +99,21 @@ test('legacy off/delay settings load; command on/off persist and rejects zero or
   await run({fromMe:false,reply:m.reply},'off',{Void:s,ownerNumber:'233240000001'});assert.equal(h.engine.getMode(),'instant')
   await run(m,'off',{Void:s});assert.equal(h.engine.getMode(),'off')
   const delayed=setup(t,{minutes:7});assert.equal(delayed.engine.getMode(),'7')
+})
+
+test('account read sync retries without duplicating the author view receipt',async t=>{
+  const h=setup(t),s=h.socket();h.engine.attach(s);h.engine.setMode('on')
+  let failSelf=true
+  s.sendReceipt=async(...args)=>{
+    if(args[3]==='read-self') {
+      if(failSelf) throw new Error('sync unavailable')
+      s.selfReceipts.push(args)
+    } else s.receipts.push(args)
+  }
+  s.ev.emit('messages.upsert',{messages:[status('self-retry')]});await settle()
+  assert.equal(s.receipts.length,1);assert.equal(s.selfReceipts.length,0)
+  assert.equal(h.engine._pending.size,1)
+  failSelf=false;await h.tick(30000)
+  assert.equal(s.receipts.length,1);assert.equal(s.selfReceipts.length,1)
+  assert.equal(h.engine._pending.size,0)
 })
