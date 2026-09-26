@@ -17,6 +17,13 @@ function load(download) {
       if (key === '../lib/plugins') return { cmd() {} }
       if (key === '../lib/safful-identities') return { isOperator: async () => true, ownerJids: () => [sudo] }
       if (key === '@whiskeysockets/baileys') return { downloadContentFromMessage: download }
+      if (key === '../lib/safful-status-media') {
+        const helper = { exports: {} }
+        vm.runInNewContext(fs.readFileSync(path.resolve(__dirname, '../lib/safful-status-media.js'), 'utf8'), {
+          module: helper, Buffer, require: () => ({ downloadContentFromMessage: download }),
+        })
+        return helper.exports
+      }
       throw Error(key)
     },
   }, { filename })
