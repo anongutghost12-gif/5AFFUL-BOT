@@ -13,7 +13,9 @@ const VIEW_ONCE_WRAPPERS = [
   'viewOnceMessageV2',
   'viewOnceMessageV2Extension',
 ]
-const MEDIA_TYPES = new Set(['imageMessage', 'videoMessage', 'audioMessage'])
+const MESSAGE_CONTAINERS = ['ephemeralMessage', 'deviceSentMessage', 'documentWithCaptionMessage',
+  'editedMessage', 'associatedChildMessage']
+const MEDIA_TYPES = new Set(['imageMessage', 'videoMessage', 'audioMessage', 'ptvMessage'])
 const SETTINGS_FILE = process.env.SAFFUL_ANTIVIEWONCE_FILE || path.join(__dirname, '..', '.safful-data', 'antiviewonce.json')
 const stats = { detected: 0, sent: 0, recovered: 0, failed: 0, unavailable: 0, lastError: '' }
 const processed = new Set(), pending = new Set(), unavailableIds = new Set()
@@ -76,7 +78,14 @@ function unwrapViewOnce(content, seenViewOnce = false) {
   for (const wrapper of VIEW_ONCE_WRAPPERS) {
     if (content[wrapper]?.message) return unwrapViewOnce(content[wrapper].message, true)
   }
-  if (content.ephemeralMessage?.message) return unwrapViewOnce(content.ephemeralMessage.message, seenViewOnce)
+  for (const wrapper of MESSAGE_CONTAINERS) {
+    const container = content[wrapper]
+    const nested = container?.message || container?.editedMessage || container?.associatedChildMessage
+    if (nested) {
+      const result = unwrapViewOnce(nested, seenViewOnce)
+      if (result) return result
+    }
+  }
 
   for (const type of MEDIA_TYPES) {
     if (content[type] && (seenViewOnce || content[type].viewOnce)) {
@@ -100,7 +109,7 @@ async function streamToBuffer(stream) {
 }
 
 async function downloadViewOnce(socket, message, unwrapped) {
-  const mediaType = unwrapped.type.replace('Message', '')
+  const mediaType = unwrapped.type === 'ptvMessage' ? 'video' : unwrapped.type.replace('Message', '')
   const download = async media => streamToBuffer(await downloadContentFromMessage(media, mediaType, { options: { timeout: 30000 } }))
   try { return await download(unwrapped.media) } catch (error) {
     const status = error.status || error.response?.status || error.output?.statusCode
@@ -108,12 +117,15 @@ async function downloadViewOnce(socket, message, unwrapped) {
     // Preserve the key and media for Baileys' supported re-upload request.
     const normalized = { ...message, message: { [unwrapped.type]: { ...unwrapped.media } } }
     const updated = await socket.updateMediaMessage(normalized)
-    return download(updated?.message?.[unwrapped.type] || normalized.message[unwrapped.type])
+    // Recent clients may return the refreshed media inside a view-once or
+    // ephemeral wrapper rather than at message.<type>.
+    const refreshed = detectViewOnce(updated) || unwrapViewOnce(updated?.message || updated, true)
+    return download(refreshed?.media || updated?.message?.[unwrapped.type] || normalized.message[unwrapped.type])
   }
 }
 
 function forwardedContent(unwrapped, buffer) {
-  const kind = unwrapped.type.replace('Message', '')
+  const kind = unwrapped.type === 'ptvMessage' ? 'video' : unwrapped.type.replace('Message', '')
   if (kind === 'audio') return { audio: buffer, mimetype: unwrapped.media.mimetype || 'audio/ogg; codecs=opus', ptt: Boolean(unwrapped.media.ptt) }
   const caption = String(unwrapped.media.caption || '').trim()
   return { [kind]: buffer, mimetype: unwrapped.media.mimetype,

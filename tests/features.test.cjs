@@ -116,6 +116,7 @@ test('detector excludes ordinary and quoted media; supports nested voice notes a
   assert.equal(d.detectViewOnce({message:{extendedTextMessage:{contextInfo:{quotedMessage:media().message}}}}),null)
   assert.equal(d.detectViewOnce({message:{deviceSentMessage:{message:{ephemeralMessage:{message:media('a','audioMessage').message}}}}}).type,'audioMessage')
   assert.equal(d.detectViewOnce({key:{isViewOnce:true},message:{videoMessage:{}}}).type,'videoMessage')
+  assert.equal(d.detectViewOnce({message:{editedMessage:{message:{viewOnceMessageV2Extension:{message:{ptvMessage:{}}}}}}}).type,'ptvMessage')
 })
 
 test('raw capture survives actual Baileys event buffering, serializer mutation and duplicate updates', async t => {
@@ -136,6 +137,18 @@ test('expired URL reaches re-upload fallback; failed messages can succeed on lat
   s.ev.emit('messages.upsert',{messages:[msg]}); await settle(); assert.equal(reuploads,1); assert.equal(s.sent.length,1); assert.ok(s.sent[0][1].audio); assert.equal(h.state.downloads[1].kind,'audio')
   h.state.fail=true; s.ev.emit('messages.upsert',{messages:[media('retry')]}); await settle(); assert.equal(avo.stats.failed,1)
   h.state.fail=false; s.ev.emit('messages.update',[{key:media('retry').key,update:{message:media('retry').message}}]); await settle(); assert.equal(s.sent.length,2)
+})
+
+test('expired media accepts a refreshed payload returned inside a modern wrapper', async t => {
+  const h=setup(t), avo=h.load('plugins/antiviewonce.js'), s=h.socket()
+  const raw=media('wrapped-refresh','videoMessage')
+  raw.message.viewOnceMessageV2.message.videoMessage.directPath='/expired'
+  s.updateMediaMessage=async message=>({key:message.key,message:{ephemeralMessage:{message:{viewOnceMessageV2Extension:{message:{videoMessage:{directPath:'/fresh',caption:'updated'}}}}}}})
+  const detected=avo.unwrapViewOnce(raw.message)
+  const bytes=await avo.downloadViewOnce(s,raw,detected)
+  assert.equal(bytes.toString(),'media bytes')
+  assert.equal(h.state.downloads.length,2)
+  assert.equal(h.state.downloads[1].media.directPath,'/fresh')
 })
 
 test('unavailable fanouts are counted without pretending to recover media; pause suppresses capture', async t => {
