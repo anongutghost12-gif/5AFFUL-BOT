@@ -73,18 +73,6 @@ function normalizedAuthor(value) {
   return /^\d+@(?:s\.whatsapp\.net|lid)$/.test(jid) ? jid : ''
 }
 
-async function accountAuthor(target, key) {
-  const authors = [key.participantAlt, key.participant].map(normalizedAuthor).filter(Boolean)
-  const phone = authors.find(jid => jid.endsWith('@s.whatsapp.net'))
-  if (phone) return phone
-  const lid = authors.find(jid => jid.endsWith('@lid'))
-  if (lid && target.signalRepository?.lidMapping?.getPNForLID) {
-    const mapped = normalizedAuthor(await target.signalRepository.lidMapping.getPNForLID(lid))
-    if (mapped.endsWith('@s.whatsapp.net')) return mapped
-  }
-  return lid || ''
-}
-
 async function markSeen(target, key, progress = {}) {
   if (!key?.id) return
   const sender = normalizedAuthor(key.participant) || normalizedAuthor(key.participantAlt)
@@ -95,22 +83,19 @@ async function markSeen(target, key, progress = {}) {
       await target.sendReceipt('status@broadcast', sender, [key.id], 'read')
       progress.authorRead = true
     }
-    // Use the supplied/mapped phone identity for account-side receipts where
-    // available. Do not manufacture a phone number from a LID. Sending a
-    // receipt does not confirm the primary phone's viewed-status UI changed.
-    const accountSender = await accountAuthor(target, key)
-    if (!accountSender) throw new Error('Status author identity is unavailable for account receipt')
-    await target.sendReceipt('status@broadcast', accountSender, [key.id], 'read-self')
-    updateLocalStatus(target, key)
-    return
+  } else if (!progress.authorRead && typeof target?.readMessages === 'function') {
+    await target.readMessages([{ ...key, remoteJid: 'status@broadcast', participant: sender }])
+    progress.authorRead = true
   }
-  if (typeof target?.readMessages === 'function') {
-    const accountSender = await accountAuthor(target, key)
-    await target.readMessages([{ ...key, remoteJid: 'status@broadcast', participant: accountSender || sender }])
-    updateLocalStatus(target, key)
-    return
-  }
-  throw new Error('Connected socket supports neither sendReceipt nor readMessages.')
+  if (typeof target?.sendNode !== 'function') throw new Error('Socket has no status-specific receipt transport; owner-side viewing cannot be synchronized')
+  // Native status-view receipts are not ordinary message receipts. The class
+  // attribute is missing from Baileys sendReceipt/readMessages. Wire reference:
+  // Auties00/Cobalt LiveLinkedWhatsAppClient.markStatusViewed, adapting
+  // WAWebHandleStatusReceipt.sendStatusMsgRead. Keep the actual author identity.
+  await target.sendNode({ tag: 'receipt', attrs: {
+    id: key.id, type: 'read', class: 'status', to: 'status@broadcast', participant: sender,
+  } })
+  updateLocalStatus(target, key)
 }
 
 function updateLocalStatus(target, key) {

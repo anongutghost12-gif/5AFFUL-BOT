@@ -31,7 +31,8 @@ function setup(t, saved) {
     '../lib/safful-identities':{isOperator:async m=>Boolean(m.fromMe)}})
   function socket() {
     const s={ev:new EventEmitter(), receipts:[], selfReceipts:[], sendReceipt:async(...args)=>
-      (args[3]==='read-self'?s.selfReceipts:s.receipts).push(args)}
+      s.receipts.push(args), sendNode:async node=>s.selfReceipts.push(
+        [node.attrs.to,node.attrs.participant,[node.attrs.id],node.attrs.type,node.attrs.class])}
     return s
   }
   async function tick(ms) {
@@ -53,8 +54,8 @@ test('on views immediately using correct broadcast receipt; duplicates are skipp
   const h=setup(t),s=h.socket();h.engine.attach(s);h.engine.setMode('on')
   s.ev.emit('messages.upsert',{messages:[status('a')]});await settle()
   assert.equal(s.receipts.length,1);assert.equal(s.receipts[0][0],'status@broadcast');assert.equal(s.receipts[0][1],'900003@lid');assert.equal(s.receipts[0][3],'read')
-  assert.equal(s.selfReceipts.length,1);assert.equal(s.selfReceipts[0][3],'read-self')
-  assert.equal(s.selfReceipts[0][1],'233240000003@s.whatsapp.net')
+  assert.equal(s.selfReceipts.length,1);assert.equal(s.selfReceipts[0][3],'read')
+  assert.equal(s.selfReceipts[0][1],'900003@lid');assert.equal(s.selfReceipts[0][4],'status')
   s.ev.emit('messages.upsert',{messages:[status('a')]});await settle();assert.equal(s.receipts.length,1)
 })
 
@@ -102,14 +103,12 @@ test('legacy off/delay settings load; command on/off persist and rejects zero or
   const delayed=setup(t,{minutes:7});assert.equal(delayed.engine.getMode(),'7')
 })
 
-test('account read sync retries without duplicating the author view receipt',async t=>{
+test('status-specific receipt retries without duplicating the generic author receipt',async t=>{
   const h=setup(t),s=h.socket();h.engine.attach(s);h.engine.setMode('on')
   let failSelf=true
-  s.sendReceipt=async(...args)=>{
-    if(args[3]==='read-self') {
-      if(failSelf) throw new Error('sync unavailable')
-      s.selfReceipts.push(args)
-    } else s.receipts.push(args)
+  s.sendNode=async node=>{
+    if(failSelf)throw new Error('sync unavailable')
+    s.selfReceipts.push(node)
   }
   s.ev.emit('messages.upsert',{messages:[status('self-retry')]});await settle()
   assert.equal(s.receipts.length,1);assert.equal(s.selfReceipts.length,0)
@@ -119,31 +118,55 @@ test('account read sync retries without duplicating the author view receipt',asy
   assert.equal(h.engine._pending.size,0)
 })
 
-test('mapped LID account receipt retries without repeating author read and updates local store only on success',async t=>{
+test('status-class wire supports PN authors without inventing identities or reading private chats',async t=>{
+  const h=setup(t),s=h.socket();h.engine.attach(s);h.engine.setMode('on')
+  const incoming=status('pn');incoming.key.participant='233240000003:2@s.whatsapp.net';delete incoming.key.participantAlt
+  s.ev.emit('messages.upsert',{messages:[incoming]});await settle()
+  assert.equal(s.selfReceipts[0][0],'status@broadcast')
+  assert.equal(s.selfReceipts[0][1],'233240000003@s.whatsapp.net')
+  assert.equal(s.selfReceipts[0][4],'status')
+  s.ev.emit('messages.upsert',{messages:[{...status('dm'),key:{...incoming.key,id:'dm',remoteJid:'233240000003@s.whatsapp.net'}}]})
+  await settle();assert.equal(s.selfReceipts.length,1)
+})
+
+test('missing status transport does not pretend owner-side sync completed',async t=>{
+  const h=setup(t),s=h.socket(),updates=[];delete s.sendNode
+  s.ev.on('messages.update',items=>updates.push(...items));h.engine.attach(s);h.engine.setMode('on')
+  s.ev.emit('messages.upsert',{messages:[status('unsupported')]});await settle()
+  assert.equal(s.receipts.length,1);assert.equal(updates.length,0)
+  assert.equal(h.engine._pending.size,1)
+  const replacement=h.socket();h.engine.attach(replacement)
+  await h.tick(30000)
+  assert.equal(replacement.receipts.length,0);assert.equal(replacement.selfReceipts[0][4],'status')
+  assert.equal(h.engine._pending.size,0)
+})
+
+test('status-class receipt retries without repeating generic author read and updates local store only on success',async t=>{
   const h=setup(t),s=h.socket(),updates=[];h.engine.attach(s);h.engine.setMode('on')
   s.ev.on('messages.update',items=>updates.push(...items))
   let unavailable=true
-  s.signalRepository={lidMapping:{getPNForLID:async lid=>{
-    assert.equal(lid,'900003@lid')
-    if(unavailable)throw new Error('mapping unavailable')
-    return '233240000003:8@s.whatsapp.net'
-  }}}
+  s.sendNode=async node=>{
+    if(unavailable)throw new Error('transport unavailable')
+    s.selfReceipts.push(node)
+  }
   const incoming=status('mapped');delete incoming.key.participantAlt
   s.ev.emit('messages.upsert',{messages:[incoming]});await settle()
   assert.equal(s.receipts.length,1);assert.equal(s.selfReceipts.length,0);assert.equal(updates.length,0)
   unavailable=false;await h.tick(30000)
-  assert.equal(s.receipts.length,1);assert.equal(s.selfReceipts[0][1],'233240000003@s.whatsapp.net')
+  assert.equal(s.receipts.length,1);assert.equal(s.selfReceipts[0].attrs.participant,'900003@lid')
+  assert.equal(s.selfReceipts[0].attrs.class,'status')
   assert.equal(updates[0].key.id,'mapped');assert.equal(updates[0].update.statusAlreadyViewed,true)
 })
 
-test('already-viewed statuses are skipped and native readMessages fallback uses canonical author',async t=>{
+test('already-viewed statuses are skipped and readMessages fallback also sends status-class receipt',async t=>{
   const h=setup(t),s=h.socket(),reads=[],updates=[]
   delete s.sendReceipt;s.readMessages=async keys=>reads.push(...keys)
   s.ev.on('messages.update',items=>updates.push(...items))
   h.engine.attach(s);h.engine.setMode('on')
   s.ev.emit('messages.upsert',{messages:[{...status('viewed'),statusAlreadyViewed:true},status('new')]});await settle()
   assert.equal(reads.length,1);assert.equal(reads[0].id,'new')
-  assert.equal(reads[0].participant,'233240000003@s.whatsapp.net');assert.equal(updates.length,1)
+  assert.equal(reads[0].participant,'900003@lid');assert.equal(updates.length,1)
+  assert.equal(s.selfReceipts[0][4],'status')
 })
 
 test('actual Baileys receipt encoder preserves broadcast routing through the DM notification guard',async t=>{
@@ -158,6 +181,8 @@ test('actual Baileys receipt encoder preserves broadcast routing through the DM 
     logger:{debug(){}},Boom:Error,isPnUser:jid=>jid.endsWith('@s.whatsapp.net'),isLidUser:jid=>jid.endsWith('@lid'),
   })
   s.sendReceipt=mod.exports
+  const {encodeBinaryNode,decodeBinaryNode}=require('@whiskeysockets/baileys')
+  s.sendNode=async node=>nodes.push(await decodeBinaryNode(encodeBinaryNode(node)))
   require('../lib/safful-mobile-notifications')(s)
   h.engine.attach(s);h.engine.setMode('on')
   const incoming=status('wire');incoming.key.participant='900003:5@lid'
@@ -165,8 +190,9 @@ test('actual Baileys receipt encoder preserves broadcast routing through the DM 
   assert.equal(nodes.length,2)
   assert.equal(nodes[0].attrs.to,'status@broadcast');assert.equal(nodes[0].attrs.participant,'900003@lid')
   assert.equal(nodes[0].attrs.type,'read')
-  assert.equal(nodes[1].attrs.to,'status@broadcast');assert.equal(nodes[1].attrs.participant,'233240000003@s.whatsapp.net')
-  assert.equal(nodes[1].attrs.type,'read-self');assert.equal(nodes[1].attrs.id,'wire')
+  assert.equal(nodes[1].attrs.to,'status@broadcast');assert.equal(nodes[1].attrs.participant,'900003@lid')
+  assert.equal(nodes[1].attrs.type,'read');assert.equal(nodes[1].attrs.id,'wire')
+  assert.equal(nodes[1].attrs.class,'status');assert.equal(nodes[0].attrs.class,undefined)
   await s.sendReceipt('233240000003@s.whatsapp.net',undefined,['dm'],'read')
   assert.equal(nodes.length,2)
 })
