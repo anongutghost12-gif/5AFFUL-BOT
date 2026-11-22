@@ -5,7 +5,8 @@ const { ownerJids } = require('../lib/safful-identities')
 const { detectViewOnce } = require('../lib/safful-viewonce-detector')
 const { rawQuotedPayload, quotedReference, mediaPayload } = require('../lib/safful-status-media')
 const capture = require('../lib/safful-kk-capture')
-const { asRaw, retrieve, relayStored, statusCode, deadline, logLine, hasMediaKey, recentOriginal, thumbnailOf } = require('../lib/safful-kk-media')
+const { asRaw, retrieve, relayStored, statusCode, deadline, logLine, hasMediaKey, recentOriginal,
+  requestOriginal, downloadOriginal, thumbnailOf } = require('../lib/safful-kk-media')
 const phone = require('../lib/safful-kk-phone')
 const active = new Set()
 
@@ -29,6 +30,8 @@ function diagnostic(error) {
     return 'Original media unavailable. This device never received the view-once payload, so there is nothing stored to relay. Turn on .antiviewonce in this chat before it is opened, or ask the sender to resend it normally.'
   }
   if (error?.code === 'KK_MISSING_URL') return 'Media link unavailable. Ask the sender to resend it.'
+  if (error?.code === 'KK_NO_ANSWER') return 'Your phone was asked to resend the original, but it did not answer in time. Open WhatsApp on the phone once, then try .kk again.'
+  if (error?.code === 'KK_RESENT_STUB') return 'Your phone answered, but sent no media: the view-once was probably already opened. Ask the sender to resend it normally.'
   if (error?.code === 'KK_TIMEOUT') return 'Media request timed out. Try again.'
   if (error?.code === 'KK_NO_RELAY') return 'This connection cannot relay the stored original. Ask the sender to resend it normally.'
   if (error?.code === 'ERR_OSSL_BAD_DECRYPT') return 'Media decryption failed. Ask the sender to resend it.'
@@ -59,6 +62,7 @@ async function attempt(socket, items) {
   let recovered
   let lastError = Object.assign(Error('Missing original'), { code: 'KK_MISSING_KEY' })
   const tried = new Set()
+  const ordered = []
   for (const candidate of items) {
     // Skip repeated references without discarding a different original key.
     const signature = JSON.stringify([candidate.detected.type, candidate.detected.media.directPath,
@@ -66,13 +70,50 @@ async function attempt(socket, items) {
     if (tried.has(signature)) continue
     if (tried.size >= 6) break
     tried.add(signature)
+    ordered.push(candidate)
     try { recovered = await retrieve(socket, candidate.raw, candidate.detected); break }
     catch (error) {
       logLine('kk-attempt-failed', candidate.detected.type, error?.code || statusCode(error) || error?.message)
       if (error.code !== 'KK_MISSING_KEY' || lastError.code === 'KK_MISSING_KEY') lastError = error
     }
   }
+  // TurboFex downloads through Baileys' own helper, which asks the phone for a
+  // fresh link on HTTP 410/404 (reuploadRequest). It is a last resort: only
+  // run it when every manual attempt failed, so a usable stored original is
+  // never downloaded twice.
+  if (!recovered) {
+    let downloads = 0
+    for (const candidate of ordered) {
+      if (downloads >= 2) break
+      if (!hasMediaKey(candidate.detected.media) || !candidate.raw?.key) continue
+      downloads += 1
+      try { recovered = await downloadOriginal(socket, candidate.raw, candidate.detected); break }
+      catch (error) {
+        logLine('kk-download-failed', candidate.detected.type,
+          error?.code || statusCode(error) || error?.message)
+        if (lastError.code === 'KK_MISSING_KEY') lastError = error
+      }
+    }
+  }
   return { recovered, lastError }
+}
+// The quote and the store can both lose the media key. WhatsApp now keeps the
+// view-once ciphertext on the primary phone and fans out only a placeholder to
+// linked devices, so the only remaining source is a resend request. Capture
+// asks at arrival; this covers replies whose capture is missing or too old.
+function shouldAskPhone(found, error, captured) {
+  const keyed = found.some(item => hasMediaKey(item.detected.media))
+  if (keyed && error?.code !== 'KK_MISSING_KEY') return false
+  // Only ask when the reply really is a view-once: either the detector found
+  // one, or the capture store saw one for this id before the quote was
+  // stripped. A reply to ordinary text must never spend a phone request.
+  const known = found.length > 0 || Boolean(captured?.entry?.type || captured?.raw)
+  if (!known) return false
+  // Capture already asked and the phone sent an unavailable fanout; another
+  // request would only spend a slot without producing media.
+  if (captured && !captured.bytes && /^(unavailable:|no-content)/.test(captured.reason || '')) return false
+  if (captured?.reason === 'phone-budget') return false
+  return true
 }
 // Prefer the original that can be relayed without a local download: it needs a
 // media key and a CDN location, and a directPath beats a plain url.
@@ -162,36 +203,71 @@ async function unwrap(message, text, meta = {}) {
       return await deliver(socket, destination, { bytes: captured.bytes, found: capturedMedia(captured.entry) })
     }
     if (cache?.bytes) return await deliver(socket, destination, { bytes: cache.bytes, found: foundMedia(detectViewOnce(cache.raw)) })
-    // 3. Last resort: decrypt the stored original in place.
+    // 3. Decrypt the stored original in place.
     let { recovered, lastError } = await attempt(socket, found)
-    if (!recovered) {
-      logLine('kk-failed', requestId, lastError?.code || statusCode(lastError) || lastError?.message)
-      // WhatsApp always sends a tiny preview with a picture, even when it keeps
-      // the file on the phone. TurboFex shows that instead of nothing.
-      const thumb = captured?.thumb || thumbnailOf(found[0]?.detected)
-      if (thumb) {
-        logLine('kk-thumb', requestId, thumb.length + 'B')
-        try {
-          await socket.sendMessage(destination, {
-            image: thumb,
-            caption: '👁️ *View-once preview only*\n' +
+    // 4. No key anywhere: ask the primary phone to resend the original and
+    // retry with the complete stanza it returns. TurboFex asks at arrival
+    // (askPhoneAgain); `.kk` must also do it for replies whose capture is
+    // missing, predates the fix, or never received the phone's answer.
+    if (!recovered && shouldAskPhone(found, lastError, captured)) {
+      const asked = await requestOriginal(socket, key, { attempts: 1 })
+      logLine('kk-phone', requestId, asked.state)
+      if (asked.state === 'resent' && asked.raw) {
+        const answer = foundFrom([asked.raw], true)
+        for (const candidate of relayCandidates(answer)) {
+          try {
+            await relayStored(socket, destination, candidate.detected)
+            logLine('kk-relayed', requestId, candidate.detected.type, 'phone')
+            return
+          } catch (error) {
+            logLine('kk-relay-failed', requestId, error?.code || statusCode(error) || error?.message)
+          }
+        }
+        const retry = await attempt(socket, answer)
+        recovered = retry.recovered
+        if (!recovered) lastError = retry.lastError
+      } else if (asked.state === 'no-budget') {
+        lastError = Object.assign(Error('Phone budget spent'), { code: 'KK_PHONE_BUDGET' })
+      } else if (asked.state === 'no-answer') {
+        lastError = Object.assign(Error('Phone did not answer'), { code: 'KK_NO_ANSWER' })
+      } else if (asked.state === 'stub') {
+        lastError = Object.assign(Error('Phone sent no media'), { code: 'KK_RESENT_STUB' })
+      }
+    }
+    if (recovered) {
+      logLine('kk-delivered', requestId, recovered.bytes?.length + 'B')
+      return await deliver(socket, destination, recovered)
+    }
+    logLine('kk-failed', requestId, lastError?.code || statusCode(lastError) || lastError?.message)
+    // WhatsApp always sends a tiny preview with a picture, even when it keeps
+    // the file on the phone. TurboFex shows that instead of nothing.
+    const thumb = captured?.thumb || thumbnailOf(found[0]?.detected)
+    if (thumb) {
+      logLine('kk-thumb', requestId, thumb.length + 'B')
+      const waiting = ['KK_NO_ANSWER', 'KK_PHONE_BUDGET'].includes(lastError?.code)
+      try {
+        await socket.sendMessage(destination, {
+          image: thumb,
+          caption: waiting
+            ? '👁️ *View-once preview only*\n' +
+              'Your phone has not sent the original yet. Open WhatsApp on the phone once, then try .kk again.'
+            : '👁️ *View-once preview only*\n' +
               'The full file is no longer available: WhatsApp keeps it on the phone and deletes it once opened.\n' +
               'Ask the sender to resend it as a normal photo or video.',
-          })
-          return
-        } catch (error) {
-          logLine('kk-thumb-failed', requestId, statusCode(error) || error?.message)
-        }
+        })
+        return
+      } catch (error) {
+        logLine('kk-thumb-failed', requestId, statusCode(error) || error?.message)
       }
-      const reason = captured?.reason || ''
-      const unavailable = Boolean(captured && !captured.bytes && /^(unavailable:|no-content)/.test(reason))
+    }
+    const reason = captured?.reason || ''
+    const unavailable = Boolean(captured && !captured.bytes && /^(unavailable:|no-content)/.test(reason))
+    if (lastError?.code === 'KK_MISSING_KEY') {
       if (unavailable) lastError = Object.assign(Error('Not delivered to this device'), { code: 'KK_NOT_DELIVERED' })
       else if (reason === 'phone-budget') lastError = Object.assign(Error('Phone budget spent'), { code: 'KK_PHONE_BUDGET' })
-      return privateNotice(socket, destination, unavailable || found.length
-        ? diagnostic(lastError) : 'No view-once media found. Reply to an available view-once message.')
     }
-    logLine('kk-delivered', requestId, recovered.bytes?.length + 'B')
-    await deliver(socket, destination, recovered)
+    return privateNotice(socket, destination, unavailable || found.length
+      ? diagnostic(lastError) : 'No view-once media found. Reply to an available view-once message.')
   } catch (error) {
     logLine('kk-error', error?.code || statusCode(error) || error?.message)
     await privateNotice(socket, destination, diagnostic(error))

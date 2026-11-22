@@ -1,11 +1,15 @@
 'use strict'
 
+// Keep the phone wait short: these tests exercise the answer/no-answer states.
+process.env.SAFFUL_KK_RESEND_MS = '300'
+
 const test = require('node:test')
 const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const path = require('node:path')
 const vm = require('node:vm')
 const crypto = require('node:crypto')
+const { EventEmitter } = require('node:events')
 const { createRequire } = require('node:module')
 const baileys = require('@whiskeysockets/baileys')
 const filename = path.resolve(__dirname, '../plugins/kk.js')
@@ -33,7 +37,8 @@ function harness() {
     },
   }, { filename })
   const relayed = []
-  const socket = { sendMessage: async (to, payload) => {
+  const ev = new EventEmitter()
+  const socket = { ev, sendMessage: async (to, payload) => {
     if (state.failAll || (state.failMedia && !payload.text)) throw Object.assign(Error('private transport failed'), { status: 500 })
     sent.push({ to, payload })
   }, relayMessage: async (to, content, options) => {
@@ -46,7 +51,7 @@ function harness() {
     imageMessage: { viewOnce: true, directPath: '/valid', mediaKey, ...media },
   } } } })
   const message = { chat: key.remoteJid, bot: socket, quoted: original(), reply: async text => replies.push(text) }
-  return { ...module.exports, sent, relayed, replies, logs, state, socket, key, original, message }
+  return { ...module.exports, sent, relayed, replies, logs, state, socket, ev, key, original, message }
 }
 async function encrypted(kind = 'image') {
   const { cipherKey, iv, macKey } = await baileys.getMediaKeys(mediaKey, kind)
@@ -71,19 +76,95 @@ test('E2E: kk relays the stored original with viewOnce cleared instead of downlo
   assert.equal(h.replies.length, 0)
 })
 
-test('kk never asks the phone to resend a view-once stub', async t => {
+test('kk does not spend a phone request when the reply is not a view-once', async t => {
   const h = harness()
-  t.mock.method(global, 'fetch', async () => { throw Error('must not fetch without keys') })
+  h.message.quoted = { key: h.key, message: { conversation: 'just text' } }
+  let asked = 0
+  h.socket.requestPlaceholderResend = async () => { asked += 1; return 'id' }
+  await h.unwrap(h.message, '')
+  assert.equal(asked, 0, 'ordinary text must never cost a phone request')
+  assert.equal(h.sent[0].to, sudo)
+  assert.match(h.sent[0].payload.text, /No view-once media found/)
+  assert.equal(h.replies.length, 0)
+})
+
+test('downloadOriginal uses Baileys downloadMediaMessage with the stored key', async t => {
+  const media = require('../lib/safful-kk-media')
+  const bytes = await encrypted()
+  t.mock.method(global, 'fetch', async () => new Response(bytes))
+  const raw = { key: { id: 'd1', remoteJid: 'team@g.us' }, message: { imageMessage: {} } }
+  const detected = { type: 'imageMessage', media: { viewOnce: true, directPath: '/v/t62/d1', mediaKey } }
+  const result = await media.downloadOriginal({}, raw, detected)
+  assert.deepEqual(result.bytes, plaintext)
+  assert.equal(result.found.kind, 'image')
+})
+
+test('kk asks the phone for a keyless view-once and relays the complete answer', async t => {
+  const h = harness()
+  t.mock.method(global, 'fetch', async () => { throw Error('the answer must be relayed, not downloaded') })
   h.message.quoted = { key: h.key, message: { viewOnceMessageV2: { message: {
     imageMessage: { viewOnce: true, caption: 'hello' },
   } } } }
   let asked = 0
-  h.socket.requestPlaceholderResend = async () => { asked += 1; return 'request-id' }
-  h.socket.sendPeerDataOperationMessage = async () => { asked += 1; return 'request-id' }
+  h.socket.requestPlaceholderResend = async () => {
+    asked += 1
+    // The phone answers on the next tick with the original, complete message.
+    setImmediate(() => h.ev.emit('messages.upsert', { messages: [h.original()], requestId: 'request-id' }))
+    return 'request-id'
+  }
   await h.unwrap(h.message, '')
-  assert.equal(asked, 0, 'a view-once stub is unrecoverable from the phone, so it is not requested')
-  assert.match(h.sent[0].payload.text, /Original media unavailable/)
+  assert.equal(asked, 1, 'the phone is the only source when the wrapper has no key')
+  assert.equal(h.relayed.length, 1)
+  assert.equal(h.relayed[0].to, sudo)
+  assert.equal(h.relayed[0].content.imageMessage.viewOnce, undefined)
+  assert.equal(h.sent.length, 0)
+  assert.equal(h.replies.length, 0)
+})
+
+test('kk reports a phone that never answers the resend request', async t => {
+  const h = harness()
+  h.message.quoted = { key: h.key, message: { viewOnceMessageV2: { message: {
+    imageMessage: { viewOnce: true, caption: 'hello' },
+  } } } }
+  h.socket.requestPlaceholderResend = async () => 'request-id'
+  await h.unwrap(h.message, '')
   assert.equal(h.sent[0].to, sudo)
+  assert.match(h.sent[0].payload.text, /did not answer in time/)
+  assert.equal(h.replies.length, 0)
+})
+
+test('kk explains a phone answer that carries no media', async t => {
+  const h = harness()
+  h.message.quoted = { key: h.key, message: { viewOnceMessageV2: { message: {
+    imageMessage: { viewOnce: true, caption: 'hello' },
+  } } } }
+  h.socket.requestPlaceholderResend = async () => {
+    setImmediate(() => h.ev.emit('messages.upsert', {
+      messages: [{ key: h.key, message: { viewOnceMessageV2: { message: {
+        imageMessage: { viewOnce: true, caption: 'hello' },
+      } } } }],
+    }))
+    return 'request-id'
+  }
+  await h.unwrap(h.message, '')
+  assert.equal(h.sent[0].to, sudo)
+  assert.match(h.sent[0].payload.text, /phone answered, but sent no media/i)
+  assert.equal(h.replies.length, 0)
+})
+
+test('kk reports a spent phone budget instead of asking again', async t => {
+  const h = harness()
+  const phone = require('../lib/safful-kk-phone')
+  phone.reset()
+  for (let i = 0; i < phone.PER_HOUR; i++) phone.allow('spent-' + i)
+  h.message.quoted = { key: h.key, message: { viewOnceMessageV2: { message: {
+    imageMessage: { viewOnce: true, caption: 'hello' },
+  } } } }
+  h.socket.requestPlaceholderResend = async () => { throw Error('the phone must not be asked') }
+  await h.unwrap(h.message, '')
+  phone.reset()
+  assert.equal(h.sent[0].to, sudo)
+  assert.match(h.sent[0].payload.text, /already asked/)
   assert.equal(h.replies.length, 0)
 })
 

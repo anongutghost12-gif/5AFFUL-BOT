@@ -148,3 +148,54 @@ test('does not chase ordinary messages or group events', async () => {
   await new Promise(resolve => setTimeout(resolve, 60))
   assert.equal(requests, 0)
 })
+
+test('chases a view-once announced with no content and no stub type', async () => {
+  let requests = 0
+  const socket = { requestPlaceholderResend: async () => { requests += 1; return 'request-id' } }
+  capture.consider(socket, {
+    key: { id: 'hidden-1', remoteJid: chat, fromMe: false, isViewOnce: true },
+    message: undefined,
+  }, 'upsert')
+  assert.ok(await waitFor(() => requests === 1), 'key.isViewOnce is enough to ask the phone')
+  const found = await capture.read(chat, 'hidden-1')
+  assert.ok(found.askedAt > 0)
+})
+
+test('asks the phone for an unavailable view-once fanout', async () => {
+  let requests = 0
+  const socket = { requestPlaceholderResend: async () => { requests += 1; return 'request-id' } }
+  capture.noteUnavailable({ id: 'fanout-1', remoteJid: chat }, 'view_once_unavailable_fanout', socket)
+  assert.ok(await waitFor(() => requests === 1), 'the WS notice alone can trigger the ask')
+  const found = await capture.read(chat, 'fanout-1')
+  assert.equal(found.reason, 'unavailable:view_once_unavailable_fanout')
+  assert.ok(found.askedAt > 0)
+})
+
+test('asks the phone when a view-once arrives without a media key, once', async () => {
+  let requests = 0
+  const socket = { requestPlaceholderResend: async () => { requests += 1; return 'request-id' } }
+  capture.consider(socket, viewOnce('keyless-1', { mediaKey: undefined }), 'upsert')
+  assert.ok(await waitFor(() => requests === 1), 'the phone was asked at arrival')
+  const found = await capture.read(chat, 'keyless-1')
+  assert.equal(found.bytes, null)
+  assert.equal(found.entry.hasKey, false)
+  assert.equal(found.reason, 'no-media-key')
+  assert.ok(found.askedAt > 0)
+  // The same placeholder announced again must not spend a second request.
+  capture.consider(socket, viewOnce('keyless-1', { mediaKey: undefined }), 'upsert')
+  await new Promise(resolve => setTimeout(resolve, 60))
+  assert.equal(requests, 1)
+})
+
+test('captures the complete message the phone sends after a keyless ask', async () => {
+  let requests = 0
+  const socket = { requestPlaceholderResend: async () => { requests += 1; return 'request-id' } }
+  capture.consider(socket, viewOnce('keyless-2', { mediaKey: undefined }), 'upsert')
+  assert.ok(await waitFor(() => requests === 1))
+  // The phone answers with the same id and a usable media key.
+  capture.ingest(null, viewOnce('keyless-2'), 'upsert', { download: async () => ({ bytes: plaintext }) })
+  assert.ok(await waitFor(async () => Boolean((await capture.read(chat, 'keyless-2'))?.bytes)))
+  const found = await capture.read(chat, 'keyless-2')
+  assert.deepEqual(found.bytes, plaintext)
+  assert.equal(found.entry.hasKey, true)
+})
