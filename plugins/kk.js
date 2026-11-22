@@ -5,7 +5,8 @@ const { ownerJids } = require('../lib/safful-identities')
 const { detectViewOnce } = require('../lib/safful-viewonce-detector')
 const { rawQuotedPayload, quotedReference, mediaPayload } = require('../lib/safful-status-media')
 const capture = require('../lib/safful-kk-capture')
-const { asRaw, retrieve, relayStored, statusCode, deadline, logLine, hasMediaKey, recentOriginal } = require('../lib/safful-kk-media')
+const { asRaw, retrieve, relayStored, statusCode, deadline, logLine, hasMediaKey, recentOriginal, thumbnailOf } = require('../lib/safful-kk-media')
+const phone = require('../lib/safful-kk-phone')
 const active = new Set()
 
 async function privateNotice(socket, destination, text) {
@@ -20,6 +21,9 @@ async function privateNotice(socket, destination, text) {
 function diagnostic(error) {
   if (error?.code === 'KK_NOT_DELIVERED') {
     return 'This device never received the view-once media. WhatsApp sent only an unavailable notice, so there is nothing to decrypt locally. Ask the sender to resend it as a normal photo or video.'
+  }
+  if (error?.code === 'KK_PHONE_BUDGET') {
+    return 'Your phone was already asked ' + phone.spent().limit + ' times in the last hour, and every request shows a "Finished syncing" notice on it. Wait a little, or ask the sender to resend it normally.'
   }
   if (error?.code === 'KK_MISSING_KEY') {
     return 'Original media unavailable. This device never received the view-once payload, so there is nothing stored to relay. Turn on .antiviewonce in this chat before it is opened, or ask the sender to resend it normally.'
@@ -88,8 +92,9 @@ async function unwrap(message, text, meta = {}) {
     if (!socket?.sendMessage || !destination) return privateNotice(socket, destination, 'Bot connection or sudo number unavailable.')
     if (/^(status|stats)$/i.test(String(text || '').trim())) {
       const state = capture.status()
+      const budget = phone.spent()
       return privateNotice(socket, destination,
-        `Capture ${state.enabled ? 'ON' : 'OFF'} | stored ${state.entries} | decrypted ${state.captured} | ${Math.round(state.bytes / 1024)} KB | pending ${state.pending}`)
+        `Capture ${state.enabled ? 'ON' : 'OFF'} | stored ${state.entries} | decrypted ${state.captured} | ${Math.round(state.bytes / 1024)} KB | asked phone ${state.asked} | phone budget ${budget.used}/${budget.limit} this hour | pending ${state.pending}`)
     }
     const quoted = message.quoted
     const reference = quotedReference(message, meta)
@@ -161,8 +166,27 @@ async function unwrap(message, text, meta = {}) {
     let { recovered, lastError } = await attempt(socket, found)
     if (!recovered) {
       logLine('kk-failed', requestId, lastError?.code || statusCode(lastError) || lastError?.message)
-      const unavailable = Boolean(captured && !captured.bytes && /^unavailable:/.test(captured.reason || ''))
+      // WhatsApp always sends a tiny preview with a picture, even when it keeps
+      // the file on the phone. TurboFex shows that instead of nothing.
+      const thumb = captured?.thumb || thumbnailOf(found[0]?.detected)
+      if (thumb) {
+        logLine('kk-thumb', requestId, thumb.length + 'B')
+        try {
+          await socket.sendMessage(destination, {
+            image: thumb,
+            caption: '👁️ *View-once preview only*\n' +
+              'The full file is no longer available: WhatsApp keeps it on the phone and deletes it once opened.\n' +
+              'Ask the sender to resend it as a normal photo or video.',
+          })
+          return
+        } catch (error) {
+          logLine('kk-thumb-failed', requestId, statusCode(error) || error?.message)
+        }
+      }
+      const reason = captured?.reason || ''
+      const unavailable = Boolean(captured && !captured.bytes && /^(unavailable:|no-content)/.test(reason))
       if (unavailable) lastError = Object.assign(Error('Not delivered to this device'), { code: 'KK_NOT_DELIVERED' })
+      else if (reason === 'phone-budget') lastError = Object.assign(Error('Phone budget spent'), { code: 'KK_PHONE_BUDGET' })
       return privateNotice(socket, destination, unavailable || found.length
         ? diagnostic(lastError) : 'No view-once media found. Reply to an available view-once message.')
     }

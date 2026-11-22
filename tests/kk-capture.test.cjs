@@ -10,6 +10,8 @@ const assert = require('node:assert/strict')
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'safful-kk-capture-'))
 process.env.SAFFUL_KK_CAPTURE_DIR = root
 process.env.SAFFUL_KK_LOG = path.join(root, 'kk.log')
+// The phone budget is shared by every test in this file.
+process.env.SAFFUL_KK_RESEND_PER_HOUR = '1000'
 
 const capture = require('../lib/safful-kk-capture')
 
@@ -96,4 +98,53 @@ test('attach copies the message before the dispatcher can strip it', async () =>
   assert.ok(found, 'entry was recorded before the dispatcher stripped the message')
   assert.equal(found.entry.hasKey, false)
   assert.equal(found.reason, 'no-media-key')
+})
+
+test('keeps the preview when the full file can no longer be fetched', async () => {
+  const thumb = Buffer.from([0xff, 0xd8, 0xff, 0xd9])
+  capture.ingest(null, viewOnce('thumb-1', { jpegThumbnail: thumb }), 'upsert', {
+    download: async () => { throw Object.assign(Error('gone'), { code: 'KK_MISSING_URL' }) },
+  })
+  assert.ok(await waitFor(async () => Boolean((await capture.read(chat, 'thumb-1'))?.thumb)))
+  const found = await capture.read(chat, 'thumb-1')
+  assert.equal(found.bytes, null)
+  assert.deepEqual(found.thumb, thumb)
+  assert.equal(found.entry.thumb, thumb.length)
+  assert.equal(found.reason, 'KK_MISSING_URL')
+})
+
+test('chases a message that arrived without its payload, once', async () => {
+  let requests = 0
+  const socket = { requestPlaceholderResend: async () => { requests += 1; return 'request-id' } }
+  const bare = {
+    key: { id: 'chase-1', remoteJid: chat, fromMe: false },
+    message: { messageContextInfo: { deviceListMetadataVersion: 2 } },
+  }
+  capture.chase(socket, bare, 'upsert')
+  assert.ok(await waitFor(() => requests === 1), 'the phone was asked')
+  const found = await capture.read(chat, 'chase-1')
+  assert.equal(found.bytes, null)
+  assert.equal(found.reason, 'no-content')
+  assert.ok(found.askedAt > 0)
+  // The same message announced again must not spend a second request.
+  capture.chase(socket, bare, 'upsert')
+  await new Promise(resolve => setTimeout(resolve, 60))
+  assert.equal(requests, 1)
+})
+
+test('does not chase ordinary messages or group events', async () => {
+  let requests = 0
+  const socket = { requestPlaceholderResend: async () => { requests += 1; return 'id' } }
+  capture.chase(socket, {
+    key: { id: 'plain-2', remoteJid: chat },
+    message: { conversation: 'hello' },
+  }, 'upsert')
+  // A group event: no message, and a stub type that is not "could not read".
+  capture.chase(socket, {
+    key: { id: 'group-1', remoteJid: chat },
+    message: null,
+    messageStubType: 1,
+  }, 'upsert')
+  await new Promise(resolve => setTimeout(resolve, 60))
+  assert.equal(requests, 0)
 })
