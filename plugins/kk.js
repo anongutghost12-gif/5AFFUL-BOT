@@ -115,10 +115,11 @@ function shouldAskPhone(found, error, captured) {
   // spends another slot and shows another notice on the phone.
   if (reason === 'phone-stub') return false
   if (/^(unavailable:|no-content)/.test(reason)) {
-    // Capture asked and `.kk` already waited for the answer above. Give the
-    // phone a few minutes before a deliberate retry from a new `.kk` call.
+    // Capture asked at arrival and `.kk` already waited out that request above.
+    // Once its answer window has passed, a deliberate `.kk` may send a fresh
+    // request (the hourly phone budget still applies).
     const askedAt = Number(captured?.askedAt || 0)
-    if (askedAt && Date.now() - askedAt < 5 * 60 * 1000) return false
+    if (askedAt && Date.now() - askedAt < capture.ANSWER_MS) return false
     return true
   }
   return true
@@ -238,7 +239,7 @@ async function unwrap(message, text, meta = {}) {
     // (askPhoneAgain); `.kk` must also do it for replies whose capture is
     // missing, predates the fix, or never received the phone's answer.
     if (!recovered && shouldAskPhone(found, lastError, captured)) {
-      const asked = await requestOriginal(socket, key, { attempts: 1 })
+      const asked = await requestOriginal(socket, key, { attempts: 1, force: true })
       logLine('kk-phone', requestId, asked.state)
       if (asked.state === 'resent' && asked.raw) {
         const answer = foundFrom([asked.raw], true)

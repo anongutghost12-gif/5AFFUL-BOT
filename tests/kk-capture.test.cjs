@@ -258,3 +258,47 @@ test('does not treat ordinary media as a phone answer without a request', () => 
   assert.equal(capture.status().entries, before, 'no request means no assumed view-once')
 })
 
+test('resend requests carry the original key metadata and report the request id', async () => {
+  const media = require('../lib/safful-kk-media')
+  media.resetResendCooldown()
+  let received
+  const socket = {
+    requestPlaceholderResend: async (key, data) => { received = { key, data }; return 'req-meta-1' },
+  }
+  const result = await media.sendResendRequest(socket, {
+    id: 'meta-1', remoteJid: chat, participant: '900003@lid',
+  })
+  assert.deepEqual(result, { ok: true, requestId: 'req-meta-1' })
+  assert.equal(received.key.id, 'meta-1')
+  assert.equal(received.key.remoteJid, chat)
+  assert.equal(received.key.participant, '900003@lid')
+  assert.equal(received.data.key.id, 'meta-1')
+  assert.ok(received.data.messageTimestamp > 0, 'the PDO cache gets a timestamp')
+  assert.equal(media.ownerOfRequest('req-meta-1')?.id, 'meta-1')
+})
+
+test('captures a phone answer whose key id was restamped, matched by request id', async () => {
+  let requests = 0
+  const socket = { requestPlaceholderResend: async () => { requests += 1; return 'request-restamp-1' } }
+  capture.consider(socket, viewOnce('restamp-1', { mediaKey: undefined }), 'upsert')
+  assert.ok(await waitFor(() => requests === 1), 'the phone was asked')
+  assert.ok(await waitFor(async () => Boolean((await capture.read(chat, 'restamp-1'))?.entry?.requestId)),
+    'the request id was recorded on the original entry')
+  // WhatsApp can return the answer under a new id, tagged with the request id.
+  capture.consider(socket, {
+    key: { id: 'restamped-answer-1', remoteJid: chat, fromMe: false },
+    message: { imageMessage: {
+      directPath: '/v/t62/restamped-answer-1', mediaKey,
+      fileLength: plaintext.length, mimetype: 'image/jpeg', caption: 'restamped',
+    } },
+  }, 'upsert', { requestId: 'request-restamp-1', download: async () => ({ bytes: plaintext }) })
+  assert.ok(await waitFor(async () => Boolean((await capture.read(chat, 'restamp-1'))?.bytes)))
+  const found = await capture.read(chat, 'restamp-1')
+  assert.deepEqual(found.bytes, plaintext)
+  assert.equal(found.entry.type, 'imageMessage')
+  assert.equal(found.entry.media.caption, 'restamped')
+  assert.equal(requests, 1)
+  // The restamped id must not create a second entry.
+  assert.equal(await capture.read(chat, 'restamped-answer-1'), null)
+})
+

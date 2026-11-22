@@ -341,6 +341,7 @@ test('kk sends bytes captured at arrival without fetching or asking the phone', 
 
 test('kk explains an unavailable fanout instead of blaming the key', async () => {
   const h = harness()
+  h.state.answerMs = 5000
   h.state.captured = {
     entry: { type: '', kind: '', media: {} }, raw: null,
     reason: 'unavailable:view_once_unavailable_fanout', bytes: null,
@@ -424,4 +425,57 @@ test('kk status reports the capture state privately', async () => {
   assert.equal(h.sent[0].to, sudo)
   assert.match(h.sent[0].payload.text, /Capture ON/)
   assert.match(h.sent[0].payload.text, /decrypted 1/)
+})
+
+test('kk accepts a phone answer that was restamped with the request id', async t => {
+  const h = harness()
+  require('../lib/safful-kk-phone').reset()
+  t.mock.method(global, 'fetch', async () => { throw Error('the answer must be relayed') })
+  h.message.quoted = { key: h.key, message: { viewOnceMessageV2: { message: {
+    imageMessage: { viewOnce: true, caption: 'hello' },
+  } } } }
+  let asked = 0
+  h.socket.requestPlaceholderResend = async () => {
+    asked += 1
+    // WhatsApp can restamp the answer's key id; Baileys tags it with the
+    // request id instead.
+    setImmediate(() => h.ev.emit('messages.upsert', {
+      messages: [{
+        key: { id: 'restamped-id', remoteJid: h.key.remoteJid, fromMe: false },
+        message: { imageMessage: { viewOnce: true, directPath: '/valid', mediaKey, caption: 'restamped' } },
+      }],
+      requestId: 'request-id',
+    }))
+    return 'request-id'
+  }
+  await h.unwrap(h.message, '')
+  assert.equal(asked, 1)
+  assert.equal(h.relayed.length, 1)
+  assert.equal(h.relayed[0].content.imageMessage.caption, 'restamped')
+  assert.equal(h.relayed[0].content.imageMessage.viewOnce, undefined)
+  assert.equal(h.replies.length, 0)
+})
+
+test('kk sends a deliberate retry after the capture answer window', async t => {
+  const h = harness()
+  require('../lib/safful-kk-phone').reset()
+  t.mock.method(global, 'fetch', async () => { throw Error('the answer must be relayed') })
+  h.state.answerMs = 1000
+  h.state.captured = {
+    entry: { type: '', kind: '', media: {} }, raw: null,
+    reason: 'unavailable:view_once', bytes: null, askedAt: Date.now() - 2000,
+  }
+  h.message.quoted = { key: h.key, message: { viewOnceMessageV2: { message: {
+    imageMessage: { viewOnce: true, caption: 'hello' },
+  } } } }
+  let asked = 0
+  h.socket.requestPlaceholderResend = async () => {
+    asked += 1
+    setImmediate(() => h.ev.emit('messages.upsert', { messages: [h.original()], requestId: 'request-id' }))
+    return 'request-id'
+  }
+  await h.unwrap(h.message, '')
+  assert.equal(asked, 1, 'a deliberate .kk may ask again after the window')
+  assert.equal(h.relayed.length, 1)
+  assert.equal(h.replies.length, 0)
 })
