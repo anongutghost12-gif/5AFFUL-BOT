@@ -160,6 +160,10 @@ test('asset extraction caps the duration and cleans its temp folder', async () =
       return { hasAudio: true, duration: 25 }
     },
     extractFrame: async (_input, outputPath) => { fs.writeFileSync(outputPath, frame) },
+    extractAnimated: async (_input, outputPath) => {
+      fs.writeFileSync(outputPath, Buffer.from('animated-webp'))
+      return fs.readFileSync(outputPath)
+    },
     extractAudio: async (_input, outputPath) => { fs.writeFileSync(outputPath, Buffer.from('fake-ogg')) },
     extractPcm: async (_input, outputPath) => { fs.writeFileSync(outputPath, pcmBuffer()) },
   })
@@ -168,7 +172,21 @@ test('asset extraction caps the duration and cleans its temp folder', async () =
   assert.equal(assets.seconds, 10)
   assert.equal(assets.waveform.length, 64)
   assert.ok(Buffer.isBuffer(assets.frameBuffer))
+  assert.deepEqual(assets.animatedBuffer, Buffer.from('animated-webp'))
   assert.equal(fs.existsSync(workDirectory), false, 'temp folder removed')
+})
+
+test('asset extraction survives an animated encode failure', async () => {
+  const frame = await frameBuffer()
+  const assets = await audioSticker.extractVideoAssets(Buffer.from('fake video'), {
+    probe: async () => ({ hasAudio: true, duration: 4 }),
+    extractFrame: async (_input, outputPath) => { fs.writeFileSync(outputPath, frame) },
+    extractAnimated: async () => { throw Object.assign(new Error('too large'), { code: 'STICKER_TOO_LARGE' }) },
+    extractAudio: async (_input, outputPath) => { fs.writeFileSync(outputPath, Buffer.from('fake-ogg')) },
+    extractPcm: async (_input, outputPath) => { fs.writeFileSync(outputPath, pcmBuffer()) },
+  })
+  assert.equal(assets.hasAudio, true)
+  assert.equal(assets.animatedBuffer, undefined, 'falls back to a still sticker')
 })
 
 test('a video without an audio stream reports no-audio', async () => {
@@ -196,6 +214,7 @@ test('sendAudioSticker relays a sticker with the voice note attached', async () 
     extract: async () => ({
       hasAudio: true,
       frameBuffer: frame,
+      animatedBuffer: Buffer.from('animated-webp'),
       audioBuffer: Buffer.from('ogg'),
       seconds: 7,
       waveform,
@@ -222,7 +241,7 @@ test('sendAudioSticker relays a sticker with the voice note attached', async () 
 
   assert.equal(result.ok, true)
   assert.equal(prepareCalls.length, 2)
-  assert.ok(Buffer.isBuffer(prepareCalls[0].sticker))
+  assert.deepEqual(prepareCalls[0].sticker, Buffer.from('animated-webp'))
   assert.ok(Buffer.isBuffer(prepareCalls[1].audio))
   assert.equal(prepareCalls[1].ptt, true)
   assert.equal(prepareCalls[1].mimetype, 'audio/ogg; codecs=opus')
@@ -234,7 +253,7 @@ test('sendAudioSticker relays a sticker with the voice note attached', async () 
   assert.deepEqual(relayCalls[0].options, { messageId: 'MSGID' })
   const relayed = relayCalls[0].message
   assert.equal(relayed.stickerMessage.audioMessage.url, 'audio-url')
-  assert.equal(relayed.stickerMessage.isAnimated, false)
+  assert.equal(relayed.stickerMessage.isAnimated, true, 'sound sticker is a video sticker')
   assert.equal(relayed.stickerMessage.width, 512)
   assert.equal(relayed.stickerMessage.height, 512)
   assert.equal(typeof relayed.stickerMessage.stickerSentTs, 'number')
@@ -242,6 +261,35 @@ test('sendAudioSticker relays a sticker with the voice note attached', async () 
   const decoded = wireAudio(relayed)
   assert.equal(decoded.url, 'audio-url')
   assert.equal(decoded.ptt, true)
+})
+
+test('sendAudioSticker falls back to a still sticker when no animation is available', async () => {
+  const frame = await frameBuffer()
+  let relayed
+  const result = await audioSticker.sendAudioSticker(
+    { waUploadToServer: async () => ({}), authState: { creds: { me: { id: '111@s.whatsapp.net' } } } },
+    '222@s.whatsapp.net',
+    Buffer.from('video'),
+    {
+      exif: null,
+      extract: async () => ({
+        hasAudio: true,
+        frameBuffer: frame,
+        audioBuffer: Buffer.from('ogg'),
+        seconds: 5,
+      }),
+      prepare: async content => content.sticker
+        ? { stickerMessage: { url: 'sticker-url', mimetype: 'image/webp' } }
+        : { audioMessage: { url: 'audio-url' } },
+      generate: (jid, content) => ({
+        key: { id: 'MSGID', remoteJid: jid, fromMe: true },
+        message: { stickerMessage: { url: 'sticker-url', mimetype: 'image/webp' } },
+      }),
+      relay: async (_socket, _jid, message) => { relayed = message },
+    },
+  )
+  assert.equal(result.ok, true)
+  assert.equal(relayed.stickerMessage.isAnimated, false)
 })
 
 test('sendAudioSticker reports no-audio without relaying', async () => {
