@@ -7,6 +7,7 @@ const exif = require('../lib/exif')
 const stylish = require('../lib/stylish-font')
 const mediaTools = require('../lib')
 const social = require('../lib/social-downloader')
+const audioSticker = require('../lib/safful-audio-sticker')
 
 const BROKEN_COMMANDS = new Set([
   'attp', 'memegen', 'emix', 'quotely', 'wallpaper', 'ttp', 'paste',
@@ -71,6 +72,13 @@ removeCommands(BROKEN_COMMANDS)
 
 function socketFor(message) {
   return message?.bot || message?.client || global.__saffulLatestSocket
+}
+
+function audioSocketFor(message) {
+  const candidates = [message?.bot, message?.client, global.__saffulLatestSocket]
+  return candidates.find(socket =>
+    typeof socket?.relayMessage === 'function' &&
+    typeof socket?.waUploadToServer === 'function') || socketFor(message)
 }
 
 async function send(message, content, options = {}) {
@@ -356,9 +364,35 @@ replaceCommand({ pattern: 'qr', alias: ['qrcode', 'makeqr'], desc: 'Create a QR 
   return send(message, { image, caption: '🔳 QR code created.' })
 })
 
-replaceCommand({ pattern: 'sticker', alias: ['s'], desc: 'Turn an image or short video into a sticker', category: 'sticker' }, async message => {
+replaceCommand({
+  pattern: 'sticker',
+  alias: ['s'],
+  desc: 'Turn an image or short video into a sticker',
+  category: 'sticker',
+  use: '[anim]',
+}, async (message, text) => {
   try {
-    return await sendSticker(message, await mediaBuffer(message))
+    const buffer = await mediaBuffer(message)
+    const type = mediaType(message)
+    const wantsAnimated = /\banim(?:ated)?\b/i.test(String(text || ''))
+    const isVideo = type.includes('video') || type.includes('ptv')
+
+    if (isVideo && !wantsAnimated) {
+      const result = await audioSticker.sendAudioSticker(audioSocketFor(message), message.chat, buffer, {
+        quoted: message,
+        packname: process.env.STICKER_PACK || 'SAFFUL-MD',
+        author: process.env.STICKER_AUTHOR || 'Safful Tech',
+      })
+      if (result?.ok) return result.message
+      if (result?.reason === 'ffmpeg-missing') {
+        await message.reply('⚠️ Audio stickers need ffmpeg on the server. Sending an animated sticker instead.')
+      }
+      if (result?.reason && result.reason !== 'no-audio') {
+        console.warn('[sticker] audio sticker skipped:', result.reason, result.error?.message || result.error || '')
+      }
+    }
+
+    return await sendSticker(message, buffer)
   } catch (error) {
     return message.reply(error?.message || 'Sticker conversion failed.')
   }
