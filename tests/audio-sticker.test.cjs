@@ -47,7 +47,16 @@ function fields(buffer) {
 
 function wireAudio(message) {
   const bytes = proto.Message.encode(message).finish()
-  const sticker = fields(bytes).find(item => item.field === 26)
+  const top = fields(bytes)
+  const wrapped = top.find(item => item.field === 134)
+  let innerBytes = bytes
+  if (wrapped) {
+    const futureProof = fields(wrapped.value)
+    const inner = futureProof.find(item => item.field === 1)
+    assert.ok(inner, 'audioStickerMessage.message is present')
+    innerBytes = inner.value
+  }
+  const sticker = fields(innerBytes).find(item => item.field === 26)
   assert.ok(sticker, 'stickerMessage field is present')
   const audio = fields(sticker.value).find(item => item.field === 26)
   assert.ok(audio, 'stickerMessage.audioMessage field 26 is present')
@@ -68,12 +77,45 @@ function pcmBuffer() {
   return buffer
 }
 
-test('the installed proto learns StickerMessage.audioMessage once', () => {
+test('the installed proto learns both sound-sticker fields once', () => {
   assert.equal(audioSticker.patchStickerAudioProto(), true)
   const patched = proto.Message.StickerMessage.encode
   assert.equal(patched.__saffulAudioStickerPatched, true)
+  assert.equal(proto.Message.encode.__saffulAudioStickerPatched, true)
   assert.equal(audioSticker.patchStickerAudioProto(), true)
   assert.equal(proto.Message.StickerMessage.encode, patched, 'patch is idempotent')
+  assert.equal(proto.Message.encode.__saffulAudioStickerPatched, true)
+})
+
+test('wrapAudioSticker nests the sticker in field 134 without duplicating it', () => {
+  const inner = proto.Message.create({
+    stickerMessage: {
+      url: 'https://mmg.whatsapp.net/sticker',
+      mimetype: 'image/webp',
+      isAnimated: true,
+      width: 512,
+      height: 512,
+    },
+  })
+  inner.stickerMessage.audioMessage = proto.Message.AudioMessage.create({
+    url: 'https://mmg.whatsapp.net/voice',
+    mimetype: 'audio/ogg; codecs=opus',
+    ptt: true,
+  })
+
+  const wrapped = audioSticker.wrapAudioSticker(inner)
+  assert.equal(wrapped.audioStickerMessage.message, inner)
+  assert.equal(wrapped.stickerMessage, inner.stickerMessage, 'relay can still see the media type')
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(wrapped, 'stickerMessage'),
+    false,
+    'the sticker is not duplicated as an own field',
+  )
+
+  const top = fields(proto.Message.encode(wrapped).finish())
+  assert.equal(top.some(item => item.field === 26), false)
+  assert.ok(top.some(item => item.field === 134), 'audioStickerMessage field 134 is present')
+  assert.equal(wireAudio(wrapped).url, 'https://mmg.whatsapp.net/voice')
 })
 
 test('an audio sticker survives the wire format with field 26', () => {
@@ -169,7 +211,7 @@ test('asset extraction caps the duration and cleans its temp folder', async () =
   })
 
   assert.equal(assets.hasAudio, true)
-  assert.equal(assets.seconds, 10)
+  assert.equal(assets.seconds, 6, 'audio is capped to the six-second animation')
   assert.equal(assets.waveform.length, 64)
   assert.ok(Buffer.isBuffer(assets.frameBuffer))
   assert.deepEqual(assets.animatedBuffer, Buffer.from('animated-webp'))
