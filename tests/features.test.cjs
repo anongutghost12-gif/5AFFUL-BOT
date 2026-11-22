@@ -331,5 +331,5 @@ test('antiviewonce resend attempts are capped per message', async t => {
   const stub = { key: { id: 'capped', remoteJid: '900003@lid', isViewOnce: true } }
   for (let i = 0; i < 5; i += 1) avo.requestResend(stub)
   await settle()
-  assert.equal(requests, 3, 'never spams the phone')
+  assert.equal(requests, 1, 'one request per id, even with repeated notices')
 })

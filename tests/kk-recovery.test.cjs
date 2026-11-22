@@ -20,6 +20,9 @@ const plaintext = Buffer.from('received view-once media bytes')
 function harness() {
   const module = { exports: {} }, commands = [], sent = [], replies = [], logs = [], state = {}
   const native = createRequire(filename)
+  // Every case replies to the same message id; start each with an empty dedupe
+  // window so one case's request cannot suppress the next case's request.
+  native('../lib/safful-kk-media').resetResendCooldown()
   vm.runInNewContext(fs.readFileSync(filename, 'utf8'), {
     module, exports: module.exports, __filename: filename, console, Buffer, global: {},
     process: { stderr: { write: line => logs.push(line) } }, setImmediate,
@@ -31,6 +34,8 @@ function harness() {
       if (name === '../lib/safful-protection') return { readCapturedViewOnce: async () => state.cache || null }
       if (name === '../lib/safful-kk-capture') return {
         read: async () => state.captured || null,
+        waitForBytes: async () => state.answered || state.captured || null,
+        get ANSWER_MS() { return state.answerMs || 0 },
         status: () => ({ enabled: true, entries: 1, captured: 1, bytes: plaintext.length, pending: 0 }),
       }
       return native(name)
@@ -339,15 +344,77 @@ test('kk explains an unavailable fanout instead of blaming the key', async () =>
   h.state.captured = {
     entry: { type: '', kind: '', media: {} }, raw: null,
     reason: 'unavailable:view_once_unavailable_fanout', bytes: null,
+    // Capture asked the phone at arrival; `.kk` must not spend another slot.
+    askedAt: Date.now(),
   }
   h.message.quoted = { key: h.key, message: { viewOnceMessageV2: { message: {
     imageMessage: { viewOnce: true },
   } } } }
   h.socket.ev = { on: () => {}, off: () => {} }
-  h.socket.requestPlaceholderResend = async () => 'request-id'
+  h.socket.requestPlaceholderResend = async () => { throw Error('the phone must not be asked again') }
   await h.unwrap(h.message, '')
   assert.equal(h.sent[0].to, sudo)
   assert.match(h.sent[0].payload.text, /never received the view-once media/)
+  assert.equal(h.replies.length, 0)
+})
+
+test('kk waits for the answer to the capture request before failing', async t => {
+  const h = harness()
+  t.mock.method(global, 'fetch', async () => { throw Error('the answer must be delivered from the store') })
+  h.state.answerMs = 5000
+  h.state.captured = {
+    entry: { type: '', kind: '', media: {} }, raw: null,
+    reason: 'unavailable:view_once', bytes: null, askedAt: Date.now(),
+  }
+  h.state.answered = {
+    entry: { type: 'imageMessage', kind: 'image', media: { mimetype: 'image/jpeg', caption: 'late' } },
+    raw: null, reason: '', bytes: plaintext, askedAt: h.state.captured.askedAt,
+  }
+  h.message.quoted = { key: h.key, message: { viewOnceMessageV2: { message: {
+    imageMessage: { viewOnce: true },
+  } } } }
+  h.socket.requestPlaceholderResend = async () => { throw Error('capture already asked') }
+  await h.unwrap(h.message, '')
+  assert.equal(h.sent[0].to, sudo)
+  assert.deepEqual(h.sent[0].payload.image, plaintext)
+  assert.equal(h.sent[0].payload.caption, 'late')
+  assert.equal(h.replies.length, 0)
+})
+
+test('kk reports a phone answer that was still an empty stub', async () => {
+  const h = harness()
+  h.state.answerMs = 5000
+  h.state.captured = {
+    entry: { type: '', kind: '', media: {} }, raw: null,
+    reason: 'unavailable:view_once', bytes: null, askedAt: Date.now(),
+  }
+  h.state.answered = {
+    entry: { type: '', kind: '', media: {} }, raw: null,
+    reason: 'phone-stub', bytes: null, askedAt: h.state.captured.askedAt,
+  }
+  h.message.quoted = { key: h.key, message: { viewOnceMessageV2: { message: {
+    imageMessage: { viewOnce: true },
+  } } } }
+  h.socket.requestPlaceholderResend = async () => { throw Error('the phone must not be asked again') }
+  await h.unwrap(h.message, '')
+  assert.equal(h.sent[0].to, sudo)
+  assert.match(h.sent[0].payload.text, /phone answered, but sent no media/i)
+  assert.equal(h.replies.length, 0)
+})
+
+test('kk explains a phone-stub answer that already arrived', async () => {
+  const h = harness()
+  h.state.captured = {
+    entry: { type: '', kind: '', media: {} }, raw: null,
+    reason: 'phone-stub', bytes: null, askedAt: Date.now() - 30000,
+  }
+  h.message.quoted = { key: h.key, message: { viewOnceMessageV2: { message: {
+    imageMessage: { viewOnce: true },
+  } } } }
+  h.socket.requestPlaceholderResend = async () => { throw Error('the phone must not be asked again') }
+  await h.unwrap(h.message, '')
+  assert.equal(h.sent[0].to, sudo)
+  assert.match(h.sent[0].payload.text, /phone answered, but sent no media/i)
   assert.equal(h.replies.length, 0)
 })
 

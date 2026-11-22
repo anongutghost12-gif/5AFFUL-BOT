@@ -113,11 +113,11 @@ test('keeps the preview when the full file can no longer be fetched', async () =
   assert.equal(found.reason, 'KK_MISSING_URL')
 })
 
-test('chases a message that arrived without its payload, once', async () => {
+test('chases a view-once that arrived without its payload, once', async () => {
   let requests = 0
   const socket = { requestPlaceholderResend: async () => { requests += 1; return 'request-id' } }
   const bare = {
-    key: { id: 'chase-1', remoteJid: chat, fromMe: false },
+    key: { id: 'chase-1', remoteJid: chat, fromMe: false, isViewOnce: true },
     message: { messageContextInfo: { deviceListMetadataVersion: 2 } },
   }
   capture.chase(socket, bare, 'upsert')
@@ -130,6 +130,18 @@ test('chases a message that arrived without its payload, once', async () => {
   capture.chase(socket, bare, 'upsert')
   await new Promise(resolve => setTimeout(resolve, 60))
   assert.equal(requests, 1)
+})
+
+test('does not chase an ordinary undecryptable stub without view-once evidence', async () => {
+  let requests = 0
+  const socket = { requestPlaceholderResend: async () => { requests += 1; return 'id' } }
+  capture.chase(socket, {
+    key: { id: 'cipher-1', remoteJid: chat },
+    message: undefined,
+    messageStubType: 2,
+  }, 'upsert')
+  await new Promise(resolve => setTimeout(resolve, 60))
+  assert.equal(requests, 0, 'a plain CIPHERTEXT stub must not spend the phone budget')
 })
 
 test('does not chase ordinary messages or group events', async () => {
@@ -199,3 +211,50 @@ test('captures the complete message the phone sends after a keyless ask', async 
   assert.deepEqual(found.bytes, plaintext)
   assert.equal(found.entry.hasKey, true)
 })
+
+test('captures a plain-media answer from the phone after an ask', async () => {
+  let requests = 0
+  const socket = { requestPlaceholderResend: async () => { requests += 1; return 'request-id' } }
+  capture.consider(socket, viewOnce('answer-plain-1', { mediaKey: undefined }), 'upsert')
+  assert.ok(await waitFor(() => requests === 1), 'the phone was asked')
+  // The phone answers with ordinary media: no view-once wrapper and no flag.
+  // Only the id we asked about may be read this way.
+  capture.consider(socket, {
+    key: { id: 'answer-plain-1', remoteJid: chat, fromMe: false },
+    message: { imageMessage: {
+      directPath: '/v/t62/answer-plain-1', mediaKey,
+      fileLength: plaintext.length, mimetype: 'image/jpeg', caption: 'from phone',
+    } },
+  }, 'upsert', { download: async () => ({ bytes: plaintext }) })
+  assert.ok(await waitFor(async () => Boolean((await capture.read(chat, 'answer-plain-1'))?.bytes)))
+  const found = await capture.read(chat, 'answer-plain-1')
+  assert.deepEqual(found.bytes, plaintext)
+  assert.equal(found.entry.type, 'imageMessage')
+  assert.equal(found.entry.media.caption, 'from phone')
+  assert.equal(requests, 1)
+})
+
+test('marks a second empty stub as the phone answer instead of asking again', async () => {
+  let requests = 0
+  const socket = { requestPlaceholderResend: async () => { requests += 1; return 'request-id' } }
+  capture.consider(socket, viewOnce('answer-stub-1', { mediaKey: undefined }), 'upsert')
+  assert.ok(await waitFor(() => requests === 1), 'the phone was asked')
+  // Ignore a duplicate notice milliseconds later; the real answer needs the
+  // 1.5 s guard so two attached sockets cannot be mistaken for an answer.
+  await new Promise(resolve => setTimeout(resolve, 1600))
+  capture.noteUnavailable({ id: 'answer-stub-1', remoteJid: chat }, 'view_once', socket)
+  const found = await capture.read(chat, 'answer-stub-1')
+  assert.equal(found.reason, 'phone-stub')
+  assert.equal(found.bytes, null)
+  assert.equal(requests, 1, 'an empty answer must not spend another request')
+})
+
+test('does not treat ordinary media as a phone answer without a request', () => {
+  const before = capture.status().entries
+  capture.consider(null, {
+    key: { id: 'plain-media-1', remoteJid: chat, fromMe: false },
+    message: { imageMessage: { directPath: '/v/t62/plain-media-1', mediaKey, mimetype: 'image/jpeg' } },
+  }, 'upsert')
+  assert.equal(capture.status().entries, before, 'no request means no assumed view-once')
+})
+

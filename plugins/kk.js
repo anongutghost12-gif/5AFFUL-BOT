@@ -109,10 +109,18 @@ function shouldAskPhone(found, error, captured) {
   // stripped. A reply to ordinary text must never spend a phone request.
   const known = found.length > 0 || Boolean(captured?.entry?.type || captured?.raw)
   if (!known) return false
-  // Capture already asked and the phone sent an unavailable fanout; another
-  // request would only spend a slot without producing media.
-  if (captured && !captured.bytes && /^(unavailable:|no-content)/.test(captured.reason || '')) return false
-  if (captured?.reason === 'phone-budget') return false
+  const reason = captured?.reason || ''
+  if (reason === 'phone-budget') return false
+  // The phone already answered with another empty stub; asking again only
+  // spends another slot and shows another notice on the phone.
+  if (reason === 'phone-stub') return false
+  if (/^(unavailable:|no-content)/.test(reason)) {
+    // Capture asked and `.kk` already waited for the answer above. Give the
+    // phone a few minutes before a deliberate retry from a new `.kk` call.
+    const askedAt = Number(captured?.askedAt || 0)
+    if (askedAt && Date.now() - askedAt < 5 * 60 * 1000) return false
+    return true
+  }
   return true
 }
 // Prefer the original that can be relayed without a local download: it needs a
@@ -151,7 +159,7 @@ async function unwrap(message, text, meta = {}) {
     active.add(requestId)
     // The arrival cache is the only source that survives a stripped quote, a
     // trimmed store and the CDN deletion that follows "view once".
-    const captured = await capture.read(key.remoteJid, key.id).catch(() => null)
+    let captured = await capture.read(key.remoteJid, key.id).catch(() => null)
     logLine('kk-start', requestId, 'capture=' + (captured
       ? (captured.bytes ? 'bytes(' + captured.bytes.length + ')' : 'raw:' + (captured.reason || 'no-bytes'))
       : 'none'))
@@ -205,6 +213,26 @@ async function unwrap(message, text, meta = {}) {
     if (cache?.bytes) return await deliver(socket, destination, { bytes: cache.bytes, found: foundMedia(detectViewOnce(cache.raw)) })
     // 3. Decrypt the stored original in place.
     let { recovered, lastError } = await attempt(socket, found)
+    // 3.5 Arrival capture may already have asked the phone. Wait for that answer
+    // instead of reporting KK_MISSING_KEY while the media is still on its way.
+    if (!recovered && captured && !captured.bytes && captured.askedAt &&
+        !/^phone-stub$/.test(captured.reason || '') &&
+        /^(unavailable:|no-content)/.test(captured.reason || '')) {
+      const remaining = capture.ANSWER_MS - (Date.now() - captured.askedAt)
+      if (remaining > 0) {
+        logLine('kk-wait-answer', requestId, Math.round(remaining) + 'ms')
+        const answered = await capture.waitForBytes(key.remoteJid, key.id, remaining)
+        if (answered?.bytes && answered.entry?.type) {
+          logLine('kk-phone-answered', requestId, answered.bytes.length + 'B')
+          return await deliver(socket, destination,
+            { bytes: answered.bytes, found: capturedMedia(answered.entry) })
+        }
+        if (answered) captured = answered
+        if (captured?.reason === 'phone-stub') {
+          lastError = Object.assign(Error('Phone sent no media'), { code: 'KK_RESENT_STUB' })
+        }
+      }
+    }
     // 4. No key anywhere: ask the primary phone to resend the original and
     // retry with the complete stanza it returns. TurboFex asks at arrival
     // (askPhoneAgain); `.kk` must also do it for replies whose capture is
@@ -263,7 +291,8 @@ async function unwrap(message, text, meta = {}) {
     const reason = captured?.reason || ''
     const unavailable = Boolean(captured && !captured.bytes && /^(unavailable:|no-content)/.test(reason))
     if (lastError?.code === 'KK_MISSING_KEY') {
-      if (unavailable) lastError = Object.assign(Error('Not delivered to this device'), { code: 'KK_NOT_DELIVERED' })
+      if (reason === 'phone-stub') lastError = Object.assign(Error('Phone sent no media'), { code: 'KK_RESENT_STUB' })
+      else if (unavailable) lastError = Object.assign(Error('Not delivered to this device'), { code: 'KK_NOT_DELIVERED' })
       else if (reason === 'phone-budget') lastError = Object.assign(Error('Phone budget spent'), { code: 'KK_PHONE_BUDGET' })
     }
     return privateNotice(socket, destination, unavailable || found.length
