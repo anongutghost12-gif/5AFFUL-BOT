@@ -66,3 +66,51 @@ test('a budget of zero keeps the phone silent', () => {
   // The limit is read at load time, so this only checks the documented value.
   assert.equal(phone.PER_HOUR, 2)
 })
+
+test('install lets the deliberate request through the gate and closes it after the answer', async () => {
+  phone.reset()
+  const backing = new Map()
+  const socket = {
+    placeholderResendCache: {
+      get: id => backing.get(id),
+      set: (id, value) => backing.set(id, value),
+      del: id => backing.delete(id),
+    },
+    requestPlaceholderResend: async key => {
+      // Emulates Baileys: the library returns early for an id it thinks it
+      // already asked about.
+      if (await socket.placeholderResendCache.get(key.id)) return undefined
+      await socket.placeholderResendCache.set(key.id, true)
+      return 'stanza-' + key.id
+    },
+  }
+  phone.install(socket)
+  // Baileys' automatic path only touches the cache; it is blocked.
+  assert.equal(await socket.placeholderResendCache.get('auto'), true)
+  // The deliberate path charges a slot and opens the gate for one request.
+  assert.equal(await socket.requestPlaceholderResend({ id: 'deliberate' }), 'stanza-deliberate')
+  socket.placeholderResendCache.del('deliberate')
+  assert.equal(await socket.placeholderResendCache.get('deliberate'), true)
+})
+
+test('the gate stays open after the request so the answer can merge the original key', async () => {
+  phone.reset()
+  const backing = new Map()
+  const socket = {
+    placeholderResendCache: {
+      get: id => backing.get(id),
+      set: (id, value) => backing.set(id, value),
+      del: id => backing.delete(id),
+    },
+    requestPlaceholderResend: async (key, data) => {
+      if (await socket.placeholderResendCache.get(key.id)) return undefined
+      await socket.placeholderResendCache.set(key.id, data || true)
+      return 'stanza'
+    },
+  }
+  phone.install(socket)
+  const metadata = { key: { id: 'keep-1' }, messageTimestamp: 1 }
+  await socket.requestPlaceholderResend({ id: 'keep-1' }, metadata)
+  // Baileys' PDO response handler reads this back to preserve the original key.
+  assert.deepEqual(await socket.placeholderResendCache.get('keep-1'), metadata)
+})

@@ -13,7 +13,7 @@ const active = new Set()
 async function privateNotice(socket, destination, text) {
   try {
     if (!socket?.sendMessage || !destination) throw Error('No private destination')
-    await socket.sendMessage(destination, { text: '[.kk] ' + text })
+    await socket.sendMessage(destination, { text: '[.kk/.vv] ' + text })
   } catch {
     // Never bubble into the legacy dispatcher, which can reply publicly.
     process.stderr.write('[kk] Could not deliver the private notification. Check the connection and SUDO setting.\n')
@@ -30,7 +30,7 @@ function diagnostic(error) {
     return 'Original media unavailable. This device never received the view-once payload, so there is nothing stored to relay. Turn on .antiviewonce in this chat before it is opened, or ask the sender to resend it normally.'
   }
   if (error?.code === 'KK_MISSING_URL') return 'Media link unavailable. Ask the sender to resend it.'
-  if (error?.code === 'KK_NO_ANSWER') return 'Your phone was asked to resend the original, but it did not answer in time. Open WhatsApp on the phone once, then try .kk again.'
+  if (error?.code === 'KK_NO_ANSWER') return 'Your phone was asked to resend the original, but it did not answer in time. Open WhatsApp on the phone once, then try .kk or .vv again.'
   if (error?.code === 'KK_RESENT_STUB') return 'Your phone answered, but sent no media: the view-once was probably already opened. Ask the sender to resend it normally.'
   if (error?.code === 'KK_TIMEOUT') return 'Media request timed out. Try again.'
   if (error?.code === 'KK_NO_RELAY') return 'This connection cannot relay the stored original. Ask the sender to resend it normally.'
@@ -151,7 +151,7 @@ async function unwrap(message, text, meta = {}) {
     const key = { ...quoted?.key, id: reference.id,
       remoteJid: quoted?.key?.remoteJid || message.chat || message.key?.remoteJid || reference.chat,
       participant: quoted?.key?.participant || quoted?.sender || reference.participant }
-    if (!key.id) return privateNotice(socket, destination, 'Reply to a view-once photo, video or voice note with .kk.')
+    if (!key.id) return privateNotice(socket, destination, 'Reply to a view-once photo, video or voice note with .kk or .vv.')
     requestId = key.remoteJid + ':' + key.id
     if (active.has(requestId) || active.size >= 2) {
       requestId = undefined
@@ -229,8 +229,14 @@ async function unwrap(message, text, meta = {}) {
             { bytes: answered.bytes, found: capturedMedia(answered.entry) })
         }
         if (answered) captured = answered
+        const windowOver = captured?.askedAt &&
+          Date.now() - Number(captured.askedAt) >= capture.ANSWER_MS - 50
         if (captured?.reason === 'phone-stub') {
           lastError = Object.assign(Error('Phone sent no media'), { code: 'KK_RESENT_STUB' })
+        } else if (windowOver && !answered?.bytes) {
+          // The capture request was in flight and its window has now closed
+          // without media. Say that plainly instead of blaming the local key.
+          lastError = Object.assign(Error('Phone did not answer'), { code: 'KK_NO_ANSWER' })
         }
       }
     }
@@ -239,7 +245,10 @@ async function unwrap(message, text, meta = {}) {
     // (askPhoneAgain); `.kk` must also do it for replies whose capture is
     // missing, predates the fix, or never received the phone's answer.
     if (!recovered && shouldAskPhone(found, lastError, captured)) {
-      const asked = await requestOriginal(socket, key, { attempts: 1, force: true })
+      // Two windows, like TurboFex's resendWait/answerWait: a phone that was
+      // asleep for the first request often answers the second one. Each
+      // request still spends one slot of the hourly budget.
+      const asked = await requestOriginal(socket, key, { attempts: 2, force: true })
       logLine('kk-phone', requestId, asked.state)
       if (asked.state === 'resent' && asked.raw) {
         const answer = foundFrom([asked.raw], true)
@@ -279,7 +288,7 @@ async function unwrap(message, text, meta = {}) {
           image: thumb,
           caption: waiting
             ? '👁️ *View-once preview only*\n' +
-              'Your phone has not sent the original yet. Open WhatsApp on the phone once, then try .kk again.'
+              'Your phone has not sent the original yet. Open WhatsApp on the phone once, then try .kk or .vv again.'
             : '👁️ *View-once preview only*\n' +
               'The full file is no longer available: WhatsApp keeps it on the phone and deletes it once opened.\n' +
               'Ask the sender to resend it as a normal photo or video.',
@@ -304,11 +313,19 @@ async function unwrap(message, text, meta = {}) {
   } finally { if (requestId) active.delete(requestId) }
 }
 
-const command = cmd({ pattern: 'kk', alias: ['unwrap', 'readvo'], desc: 'Send replied view-once media to sudo', category: 'owner',
+const command = cmd({ pattern: 'kk', alias: ['unwrap', 'readvo', 'vv', 'viewonce'],
+  desc: 'Send replied view-once media to sudo', category: 'owner',
   filename: __filename, use: '<reply to view-once media>' }, unwrap)
 setImmediate(() => {
+  // The legacy loader may also register `.kk` / `.vv`; keep only this handler
+  // so the hardened flow is the one that runs.
+  const names = new Set(['kk', 'vv', 'unwrap', 'readvo', 'viewonce'])
   for (let i = commands.length - 1; i >= 0; i--) {
-    if (commands[i] !== command && commands[i].pattern === 'kk') commands.splice(i, 1)
+    const entry = commands[i]
+    if (entry === command) continue
+    const aliases = [entry?.pattern, entry?.cmdname, ...(Array.isArray(entry?.alias) ? entry.alias : [])]
+      .filter(Boolean).map(name => String(name).toLowerCase())
+    if (aliases.some(name => names.has(name))) commands.splice(i, 1)
   }
 })
 module.exports = { unwrap }

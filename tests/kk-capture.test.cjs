@@ -277,6 +277,35 @@ test('resend requests carry the original key metadata and report the request id'
   assert.equal(media.ownerOfRequest('req-meta-1')?.id, 'meta-1')
 })
 
+test('a gated socket still sends the deliberate request', async () => {
+  const media = require('../lib/safful-kk-media')
+  const phone = require('../lib/safful-kk-phone')
+  media.resetResendCooldown()
+  phone.reset()
+  const backing = new Map()
+  let calls = 0
+  const socket = {
+    placeholderResendCache: {
+      get: id => backing.get(id),
+      set: (id, value) => backing.set(id, value),
+      del: id => backing.delete(id),
+    },
+    requestPlaceholderResend: async (key, data) => {
+      calls += 1
+      // Emulates the library's own cache check.
+      if (await socket.placeholderResendCache.get(key.id)) return undefined
+      await socket.placeholderResendCache.set(key.id, data || true)
+      return 'req-gated-1'
+    },
+  }
+  phone.install(socket)
+  // Baileys' automatic path (cache only) is blocked.
+  assert.equal(await socket.placeholderResendCache.get('gated-1'), true)
+  const result = await media.sendResendRequest(socket, { id: 'gated-1', remoteJid: chat })
+  assert.deepEqual(result, { ok: true, requestId: 'req-gated-1' })
+  assert.equal(calls, 1, 'the deliberate request reached the socket')
+})
+
 test('captures a phone answer whose key id was restamped, matched by request id', async () => {
   let requests = 0
   const socket = { requestPlaceholderResend: async () => { requests += 1; return 'request-restamp-1' } }

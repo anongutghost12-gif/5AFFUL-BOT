@@ -246,7 +246,7 @@ test('kk replaces duplicate legacy registrations and preserves its existing alia
   const registrations = h.registry.filter(command => command.pattern === 'kk')
   assert.equal(registrations.length, 1)
   assert.equal(registrations[0].fn, kk.unwrap)
-  assert.deepEqual(Array.from(registrations[0].alias), ['unwrap', 'readvo'])
+  assert.deepEqual(Array.from(registrations[0].alias), ['unwrap', 'readvo', 'vv', 'viewonce'])
 })
 
 test('status limits apply to protobuf lengths/timestamps; revokes match observed PN/LID aliases', async t => {
