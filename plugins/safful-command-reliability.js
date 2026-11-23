@@ -156,6 +156,39 @@ async function sendSticker(message, buffer, metadata) {
   }
 }
 
+// Explain why a video with sound could not become a sound sticker, so the
+// silent fallback is visible instead of looking like a successful send.
+function audioStickerNote(result) {
+  const reason = result?.reason
+  if (!reason || reason === 'no-audio') return ''
+  const detail = String(result?.error?.message || result?.error || '')
+    .replace(/[A-Za-z]:\\[^\s'"]+/g, '<path>')
+    .replace(/\/[^\s'"]*safful-[^\s'"]*/g, '<path>')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 160)
+  const suffix = detail ? ` (${detail})` : ''
+  switch (reason) {
+    case 'ffmpeg-missing':
+      return '⚠️ Audio stickers need ffmpeg on the server. Sending a silent sticker instead.'
+    case 'ffprobe-missing':
+    case 'tool-missing':
+      return '⚠️ Audio stickers need ffmpeg/ffprobe on the server. Sending a silent sticker instead.'
+    case 'extract-failed':
+      return `⚠️ I could not read the audio track${suffix}. Sending a silent sticker instead.`
+    case 'sticker-failed':
+      return `⚠️ I could not build the sticker${suffix}.`
+    case 'upload-failed':
+      return `⚠️ I could not upload the sticker audio${suffix}. Sending a silent sticker instead.`
+    case 'upload-unavailable':
+      return '⚠️ This connection cannot upload sticker audio. Sending a silent sticker instead.'
+    case 'prepare-failed':
+      return '⚠️ WhatsApp did not return the sticker audio details. Sending a silent sticker instead.'
+    default:
+      return `⚠️ The sound sticker failed (${reason})${suffix}. Sending a silent sticker instead.`
+  }
+}
+
 replaceCommand({
   pattern: 'ping',
   alias: ['speed'],
@@ -384,8 +417,9 @@ replaceCommand({
         author: process.env.STICKER_AUTHOR || 'Safful Tech',
       })
       if (result?.ok) return result.message
-      if (result?.reason === 'ffmpeg-missing') {
-        await message.reply('⚠️ Audio stickers need ffmpeg on the server. Sending an animated sticker instead.')
+      const note = audioStickerNote(result)
+      if (note) {
+        try { await message.reply(note) } catch {}
       }
       if (result?.reason && result.reason !== 'no-audio') {
         console.warn('[sticker] audio sticker skipped:', result.reason, result.error?.message || result.error || '')

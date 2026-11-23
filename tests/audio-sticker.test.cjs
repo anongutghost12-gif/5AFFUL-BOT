@@ -7,7 +7,7 @@ const assert = require('node:assert/strict')
 const sharp = require('sharp')
 
 const audioSticker = require('../lib/safful-audio-sticker')
-const { proto } = require('@whiskeysockets/baileys')
+const { proto, prepareWAMessageMedia, generateWAMessageFromContent } = require('@whiskeysockets/baileys')
 
 function readVarint(buffer, position) {
   let result = 0
@@ -157,6 +157,17 @@ test('probe output is parsed into duration and audio presence', () => {
   assert.equal(silent.duration, 0)
 })
 
+test('ffmpeg banner is parsed when ffprobe is unavailable', () => {
+  const parsed = audioSticker.parseFfmpegProbe(`
+Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'input.bin':
+  Duration: 00:00:08.04, start: 0.000000, bitrate: 1200 kb/s
+  Stream #0:0(und): Video: h264 (High), yuv420p, 720x1280, 30 fps
+  Stream #0:1(und): Audio: aac (LC), 44100 Hz, mono, fltp, 96 kb/s
+`)
+  assert.deepEqual(parsed, { hasAudio: true, hasVideo: true, duration: 8.04, width: 720, height: 1280 })
+  assert.equal(audioSticker.parseFfmpegProbe('no media here'), null)
+})
+
 test('voice notes are capped at ten whole seconds', () => {
   assert.equal(audioSticker.audioSeconds(7.4), 7)
   assert.equal(audioSticker.audioSeconds(0.2), 1)
@@ -240,7 +251,6 @@ test('a video without an audio stream reports no-audio', async () => {
 
 test('sendAudioSticker relays a sticker with the voice note attached', async () => {
   const frame = await frameBuffer()
-  const waveform = audioSticker.buildWaveform(pcmBuffer())
   const quoted = { key: { id: 'QUOTED', remoteJid: '222@s.whatsapp.net' }, message: { conversation: '.sticker' } }
   const prepareCalls = []
   const relayCalls = []
@@ -259,7 +269,6 @@ test('sendAudioSticker relays a sticker with the voice note attached', async () 
       animatedBuffer: Buffer.from('animated-webp'),
       audioBuffer: Buffer.from('ogg'),
       seconds: 7,
-      waveform,
     }),
     prepare: async (content) => {
       prepareCalls.push(content)
@@ -285,10 +294,10 @@ test('sendAudioSticker relays a sticker with the voice note attached', async () 
   assert.equal(prepareCalls.length, 2)
   assert.deepEqual(prepareCalls[0].sticker, Buffer.from('animated-webp'))
   assert.ok(Buffer.isBuffer(prepareCalls[1].audio))
-  assert.equal(prepareCalls[1].ptt, true)
+  assert.equal(prepareCalls[1].ptt, undefined, 'sound stickers are not voice notes')
   assert.equal(prepareCalls[1].mimetype, 'audio/ogg; codecs=opus')
   assert.equal(prepareCalls[1].seconds, 7)
-  assert.equal(prepareCalls[1].waveform, waveform)
+  assert.equal(prepareCalls[1].waveform, undefined, 'no waveform in the Web descriptor')
 
   assert.equal(relayCalls.length, 1)
   assert.equal(relayCalls[0].jid, '222@s.whatsapp.net')
@@ -302,7 +311,7 @@ test('sendAudioSticker relays a sticker with the voice note attached', async () 
 
   const decoded = wireAudio(relayed)
   assert.equal(decoded.url, 'audio-url')
-  assert.equal(decoded.ptt, true)
+  assert.notEqual(decoded.ptt, true, 'no ptt on the sticker audio descriptor')
 })
 
 test('sendAudioSticker falls back to a still sticker when no animation is available', async () => {
@@ -375,4 +384,51 @@ test('sendAudioSticker needs the socket uploader', async () => {
   )
   assert.equal(result.ok, false)
   assert.equal(result.reason, 'upload-unavailable')
+})
+
+test('the real prepare/generate path yields a decodable sound-sticker descriptor', async () => {
+  // Exercise Baileys' own media prep and message builder, not a hand-written
+  // stub, so the descriptor on the wire matches what a real socket produces.
+  const webp = await sharp({
+    create: { width: 512, height: 512, channels: 4, background: { r: 1, g: 2, b: 3, alpha: 1 } },
+  }).webp().toBuffer()
+
+  const upload = async () => ({
+    mediaUrl: 'https://mmg.whatsapp.net/v/t62.7117-24/fake.enc',
+    directPath: '/v/t62.7117-24/fake.enc',
+  })
+  const socket = {
+    waUploadToServer: upload,
+    relayMessage: async () => {},
+    authState: { creds: { me: { id: '111@s.whatsapp.net' } } },
+  }
+
+  let relayed
+  const result = await audioSticker.sendAudioSticker(socket, '222@s.whatsapp.net', Buffer.from('video'), {
+    exif: null,
+    prepare: prepareWAMessageMedia,
+    generate: generateWAMessageFromContent,
+    extract: async () => ({
+      hasAudio: true,
+      frameBuffer: webp,
+      animatedBuffer: webp,
+      audioBuffer: Buffer.alloc(4000, 1),
+      audioMimetype: 'audio/ogg; codecs=opus',
+      seconds: 6,
+    }),
+    relay: async (_socket, _jid, message) => { relayed = message },
+  })
+
+  assert.equal(result.ok, true)
+  const decoded = wireAudio(relayed)
+  assert.equal(decoded.mimetype, 'audio/ogg; codecs=opus')
+  assert.equal(Buffer.from(decoded.mediaKey).length, 32)
+  assert.equal(Buffer.from(decoded.fileSha256).length, 32)
+  assert.equal(Buffer.from(decoded.fileEncSha256).length, 32)
+  assert.ok(Number(decoded.fileLength) > 0, 'fileLength is a positive number')
+  assert.ok(Number(decoded.mediaKeyTimestamp) > 0, 'mediaKeyTimestamp is a positive number')
+  assert.ok(decoded.url, 'audio url is present')
+  assert.ok(decoded.directPath, 'audio directPath is present')
+  assert.notEqual(decoded.ptt, true, 'no ptt, like WhatsApp Web')
+  assert.ok(decoded.waveform == null, 'no waveform, like WhatsApp Web')
 })
